@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Prompts - Clean Room{% endblock %}
+{% block content %}
+<h1>Prompts</h1>
+<table id="prompts-table">
+    <thead>
+        <tr><th>Name</th><th>Preview</th><th>Actions</th></tr>
+    </thead>
+    <tbody id="prompt-list">
+        {% for prompt in prompts %}
+        {% include "partials/prompt_row.html" %}
+        {% endfor %}
+    </tbody>
+</table>
+<h2>New Prompt</h2>
+<form hx-post="/prompts" hx-target="#prompt-list" hx-swap="beforeend">
+    <label>Name <input type="text" name="name" required></label>
+    <label>Template <textarea name="template" rows="10" required></textarea></label>
+    <button type="submit">Create</button>
+</form>
+{% endblock %}

@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}{{ repo.org }}/{{ repo.repo_name }} - Clean Room{% endblock %}
+{% block content %}
+<h1>{{ repo.org }}/{{ repo.repo_name }}</h1>
+<p>
+    <a href="{{ repo.github_url }}" target="_blank">GitHub</a>
+    | Status: <span class="status-badge status-{{ repo.status }}">{{ repo.status }}</span>
+    | <form style="display:inline" method="post" action="/repos/{{ repo.id }}/archive">
+        <button type="submit">Archive</button>
+    </form>
+</p>
+
+<h2>New Job</h2>
+<form method="post" action="/jobs">
+    <input type="hidden" name="repo_id" value="{{ repo.id }}">
+    <label>Prompt
+        <select name="prompt_id" required>
+            {% for prompt in prompts %}
+            <option value="{{ prompt.id }}">{{ prompt.name }}</option>
+            {% endfor %}
+        </select>
+    </label>
+    <label>Feature Description (optional)
+        <textarea name="feature_description" rows="3" placeholder="e.g. the authentication system"></textarea>
+    </label>
+    <label>Max Iterations
+        <input type="number" name="max_iterations" value="20" min="1" max="100">
+    </label>
+    <button type="submit">Start Job</button>
+</form>
+
+<h2>Jobs</h2>
+<table>
+    <thead>
+        <tr><th>ID</th><th>Prompt</th><th>Status</th><th>Iteration</th><th>Started</th><th></th></tr>
+    </thead>
+    <tbody>
+        {% for job in jobs %}
+        <tr>
+            <td><a href="/jobs/{{ job.id }}">{{ job.id }}</a></td>
+            <td>{{ job.prompt_name }}</td>
+            <td><span class="status-badge status-{{ job.status }}">{{ job.status }}</span></td>
+            <td>{{ job.current_iteration }}/{{ job.max_iterations }}</td>
+            <td>{{ job.started_at or "-" }}</td>
+            <td><a href="/jobs/{{ job.id }}">View</a></td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}

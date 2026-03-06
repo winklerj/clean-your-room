@@ -1,0 +1,17 @@
+body { font-family: system-ui, sans-serif; max-width: 960px; margin: 0 auto; padding: 1rem; }
+nav { display: flex; gap: 1rem; padding: 0.5rem 0; border-bottom: 1px solid #ccc; margin-bottom: 1rem; }
+nav a { text-decoration: none; color: #333; font-weight: 600; }
+table { width: 100%; border-collapse: collapse; }
+th, td { padding: 0.5rem; text-align: left; border-bottom: 1px solid #eee; }
+code { font-size: 0.85em; }
+textarea { font-family: monospace; width: 100%; }
+button { cursor: pointer; padding: 0.25rem 0.75rem; }
+label { display: block; margin: 0.5rem 0; }
+input[type="text"], input[type="url"], input[type="number"] { width: 100%; padding: 0.25rem; }
+.status-badge { padding: 0.15rem 0.5rem; border-radius: 3px; font-size: 0.85em; }
+.status-running { background: #dff0d8; }
+.status-completed { background: #d9edf7; }
+.status-stopped { background: #fcf8e3; }
+.status-failed { background: #f2dede; }
+.status-pending { background: #eee; }
+.log-stream { background: #1e1e1e; color: #d4d4d4; font-family: monospace; font-size: 0.85em; padding: 1rem; height: 500px; overflow-y: auto; white-space: pre-wrap; word-wrap: break-word; }
