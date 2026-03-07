@@ -12,7 +12,7 @@
     <tbody>
         {% for repo in repos %}
         <tr>
-            <td><a href="/repos/{{ repo.id }}">{{ repo.slug }}</a></td>
+            <td><a href="/repos/{{ repo.id }}">{{ repo.org }}/{{ repo.repo_name }}</a></td>
             <td>
                 {% if repo.last_status %}
                 <span class="status-badge status-{{ repo.last_status }}">{{ repo.last_status }}</span>

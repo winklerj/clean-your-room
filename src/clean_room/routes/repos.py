@@ -16,6 +16,12 @@ async def add_repo(github_url: str = Form()):
     db = await get_db(DB_PATH)
     try:
         cursor = await db.execute(
+            "SELECT id FROM repos WHERE slug=?", (parsed.slug,)
+        )
+        existing = await cursor.fetchone()
+        if existing:
+            return RedirectResponse(f"/repos/{existing[0]}", status_code=303)
+        cursor = await db.execute(
             "INSERT INTO repos (github_url, org, repo_name, slug, clone_path) "
             "VALUES (?, ?, ?, ?, ?) RETURNING id",
             (parsed.url, parsed.org, parsed.repo_name, parsed.slug, str(clone_path)),

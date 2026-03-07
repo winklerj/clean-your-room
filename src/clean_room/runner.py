@@ -1,4 +1,5 @@
 import asyncio
+import os
 from pathlib import Path
 
 from clean_room.streaming import LogBuffer
@@ -72,11 +73,30 @@ class JobRunner:
         Uses claude_agent_sdk to run an agent with filesystem access
         scoped to self.repo_path.
         """
-        from claude_agent_sdk import Agent
-
-        agent = Agent(
-            model="claude-sonnet-4-20250514",
-            instructions=self.prompt,
+        from claude_agent_sdk import (
+            query, ClaudeAgentOptions, ResultMessage, AssistantMessage, TextBlock,
         )
-        result = await agent.run()
-        return result.output
+
+        clean_env = {
+            k: v for k, v in os.environ.items() if k != "CLAUDECODE"
+        }
+
+        output_parts = []
+        async for message in query(
+            prompt=self.prompt,
+            options=ClaudeAgentOptions(
+                cwd=str(self.repo_path),
+                model="claude-sonnet-4-6",
+                allowed_tools=["Read", "Write", "Edit", "Glob", "Grep", "Bash"],
+                permission_mode="acceptEdits",
+                max_turns=10,
+                env=clean_env,
+            ),
+        ):
+            if isinstance(message, AssistantMessage):
+                for block in message.content:
+                    if isinstance(block, TextBlock):
+                        output_parts.append(block.text)
+            elif isinstance(message, ResultMessage) and message.result is not None:
+                output_parts.append(message.result)
+        return "\n".join(output_parts) if output_parts else "No output from agent."
