@@ -28,6 +28,8 @@ if static_dir.is_dir():
 
 from clean_room.routes.prompts import router as prompts_router
 from clean_room.routes.repos import router as repos_router
+from clean_room.routes.jobs import router as jobs_router
 
 app.include_router(prompts_router)
 app.include_router(repos_router)
+app.include_router(jobs_router)
