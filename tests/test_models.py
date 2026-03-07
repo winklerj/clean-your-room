@@ -2,7 +2,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from clean_room.models import GitHubUrl, parse_github_url
+from clean_room.models import parse_github_url
 
 
 class TestParseGitHubUrl:

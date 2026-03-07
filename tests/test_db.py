@@ -1,6 +1,5 @@
 import pytest
 import aiosqlite
-from pathlib import Path
 
 from clean_room.db import init_db, get_db
 

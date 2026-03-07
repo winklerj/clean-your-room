@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - Clean Room{% endblock %}
+{% block content %}
+<h1>Clean Room</h1>
+<p><a href="/repos/new">Add Repo</a></p>
+
+{% if repos %}
+<table>
+    <thead>
+        <tr><th>Repo</th><th>Last Job</th><th>Last Run</th></tr>
+    </thead>
+    <tbody>
+        {% for repo in repos %}
+        <tr>
+            <td><a href="/repos/{{ repo.id }}">{{ repo.slug }}</a></td>
+            <td>
+                {% if repo.last_status %}
+                <span class="status-badge status-{{ repo.last_status }}">{{ repo.last_status }}</span>
+                {% else %}
+                <span class="status-badge status-pending">no jobs</span>
+                {% endif %}
+            </td>
+            <td>{{ repo.last_run or "-" }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p>No repos yet. Add one to get started.</p>
+{% endif %}
+{% endblock %}

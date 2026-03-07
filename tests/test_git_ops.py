@@ -1,6 +1,5 @@
 import pytest
 import subprocess
-from pathlib import Path
 
 from clean_room.git_ops import clone_repo, pull_repo, init_specs_monorepo, commit_specs
 
