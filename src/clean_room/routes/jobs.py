@@ -188,7 +188,8 @@ async def job_stream(job_id: int):
     async def event_generator():
         for msg in log_buffer.get_history(job_id):
             yield {"data": msg}
-        async for msg in log_buffer.subscribe(job_id):
-            yield {"data": msg}
+        if job_id not in log_buffer._closed:
+            async for msg in log_buffer.subscribe(job_id):
+                yield {"data": msg}
 
     return EventSourceResponse(event_generator())

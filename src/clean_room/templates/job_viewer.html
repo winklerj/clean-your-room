@@ -25,10 +25,12 @@
 <h2>Log</h2>
 <div class="log-stream"
      id="log"
+     {% if job.status in ('pending', 'running') %}
      hx-ext="sse"
      sse-connect="/jobs/{{ job.id }}/stream"
      sse-swap="message"
-     hx-swap="beforeend">
+     hx-swap="beforeend"
+     {% endif %}>
     {%- for log in logs %}{{ log.content }}
 {% endfor -%}
 </div>
