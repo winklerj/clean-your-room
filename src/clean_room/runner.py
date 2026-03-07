@@ -12,6 +12,7 @@ class JobRunner:
         self,
         job_id: int,
         repo_path: Path,
+        specs_path: Path,
         prompt: str,
         max_iterations: int,
         log_buffer: LogBuffer,
@@ -19,6 +20,7 @@ class JobRunner:
     ):
         self.job_id = job_id
         self.repo_path = repo_path
+        self.specs_path = specs_path
         self.prompt = prompt
         self.max_iterations = max_iterations
         self.log_buffer = log_buffer
@@ -69,9 +71,9 @@ class JobRunner:
     async def _run_agent_iteration(self, iteration: int) -> str:
         """Run a single Claude Agent SDK iteration.
 
-        Uses claude_agent_sdk to run an agent with filesystem access
-        scoped to self.repo_path.  Streams each message to the log buffer
-        in real time and returns the full output for DB persistence.
+        Uses claude_agent_sdk to run an agent with filesystem access.
+        Reads from repo_path, writes specs to specs_path.
+        Streams each message to the log buffer in real time.
         """
         from claude_agent_sdk import (
             query, ClaudeAgentOptions, ResultMessage, AssistantMessage, TextBlock,
@@ -81,13 +83,25 @@ class JobRunner:
             k: v for k, v in os.environ.items() if k != "CLAUDECODE"
         }
 
+        self.specs_path.mkdir(parents=True, exist_ok=True)
+
+        system = (
+            f"You are analyzing the repository at {self.repo_path} (read-only reference).\n"
+            f"Write ALL output files to {self.specs_path} (your working directory).\n"
+            f"Read existing specs from {self.specs_path} to see what has already been created.\n"
+            "IMPORTANT: You MUST write all spec files to your working directory ONLY.\n"
+            "Do NOT create files in the repository or any other directory."
+        )
+
         output_parts = []
         async for message in query(
             prompt=self.prompt,
             options=ClaudeAgentOptions(
-                cwd=str(self.repo_path),
+                cwd=str(self.specs_path),
                 model="claude-sonnet-4-6",
-                allowed_tools=["Read", "Write", "Edit", "Glob", "Grep", "Bash"],
+                system_prompt=system,
+                add_dirs=[str(self.repo_path)],
+                allowed_tools=["Read", "Write", "Edit", "Glob", "Grep"],
                 permission_mode="acceptEdits",
                 max_turns=50,
                 setting_sources=["project"],

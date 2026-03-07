@@ -1,5 +1,4 @@
 import asyncio
-import shutil
 from pathlib import Path
 from fastapi import APIRouter, Request, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -18,9 +17,12 @@ active_jobs: dict[int, asyncio.Event] = {}
 running_tasks: dict[int, asyncio.Task] = {}
 
 
-async def _start_job(job_id: int, repo_path: Path, prompt: str, max_iterations: int):
+async def _start_job(
+    job_id: int, repo_path: Path, slug: str, prompt: str, max_iterations: int
+):
     """Background task that runs the job."""
     db = await get_db(DB_PATH)
+    specs_path = SPECS_MONOREPO_DIR / slug
     try:
         await db.execute(
             "UPDATE jobs SET status='running', started_at=datetime('now') WHERE id=?",
@@ -37,6 +39,7 @@ async def _start_job(job_id: int, repo_path: Path, prompt: str, max_iterations: 
         runner = JobRunner(
             job_id=job_id,
             repo_path=repo_path,
+            specs_path=specs_path,
             prompt=prompt,
             max_iterations=max_iterations,
             log_buffer=log_buffer,
@@ -51,23 +54,10 @@ async def _start_job(job_id: int, repo_path: Path, prompt: str, max_iterations: 
         )
         await db.commit()
 
-        cursor = await db.execute(
-            "SELECT r.slug FROM repos r JOIN jobs j ON j.repo_id=r.id WHERE j.id=?",
-            (job_id,),
+        await commit_specs(
+            SPECS_MONOREPO_DIR,
+            f"{'Partial specs' if cancel_event.is_set() else 'Specs'} for {slug}",
         )
-        row = await cursor.fetchone()
-        if row:
-            slug = row[0]
-            specs_src = repo_path / "specs"
-            specs_dest = SPECS_MONOREPO_DIR / slug
-            if specs_src.is_dir():
-                specs_dest.mkdir(parents=True, exist_ok=True)
-                for f in specs_src.iterdir():
-                    shutil.copy2(f, specs_dest / f.name)
-                await commit_specs(
-                    SPECS_MONOREPO_DIR,
-                    f"{'Partial specs' if cancel_event.is_set() else 'Specs'} for {slug}",
-                )
     except Exception:
         await db.execute(
             "UPDATE jobs SET status='failed', completed_at=datetime('now') WHERE id=?",
@@ -98,12 +88,13 @@ async def create_job(
         job_id = row[0]
         await db.commit()
 
-        cursor = await db.execute("SELECT clone_path FROM repos WHERE id=?", (repo_id,))
+        cursor = await db.execute("SELECT clone_path, slug FROM repos WHERE id=?", (repo_id,))
         repo_row = await cursor.fetchone()
         cursor = await db.execute("SELECT template FROM prompts WHERE id=?", (prompt_id,))
         prompt_row = await cursor.fetchone()
 
         repo_path = Path(repo_row[0])
+        slug = repo_row[1]
         prompt = prompt_row[0]
         if feature_description:
             prompt = f"Feature focus: {feature_description}\n\n{prompt}"
@@ -112,7 +103,7 @@ async def create_job(
 
     cancel_event = asyncio.Event()
     active_jobs[job_id] = cancel_event
-    task = asyncio.create_task(_start_job(job_id, repo_path, prompt, max_iterations))
+    task = asyncio.create_task(_start_job(job_id, repo_path, slug, prompt, max_iterations))
     running_tasks[job_id] = task
 
     return RedirectResponse(f"/jobs/{job_id}", status_code=303)
@@ -166,7 +157,7 @@ async def restart_job(job_id: int):
         await db.commit()
 
         cursor = await db.execute(
-            "SELECT clone_path FROM repos WHERE id=?", (old["repo_id"],),
+            "SELECT clone_path, slug FROM repos WHERE id=?", (old["repo_id"],),
         )
         repo_row = await cursor.fetchone()
         cursor = await db.execute(
@@ -175,6 +166,7 @@ async def restart_job(job_id: int):
         prompt_row = await cursor.fetchone()
 
         repo_path = Path(repo_row[0])
+        slug = repo_row[1]
         prompt = prompt_row[0]
         if old["feature_description"]:
             prompt = f"Feature focus: {old['feature_description']}\n\n{prompt}"
@@ -184,7 +176,7 @@ async def restart_job(job_id: int):
     cancel_event = asyncio.Event()
     active_jobs[new_id] = cancel_event
     task = asyncio.create_task(
-        _start_job(new_id, repo_path, prompt, old["max_iterations"])
+        _start_job(new_id, repo_path, slug, prompt, old["max_iterations"])
     )
     running_tasks[new_id] = task
 

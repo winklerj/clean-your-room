@@ -21,6 +21,7 @@ async def test_runner_respects_cancellation(log_buffer):
     runner = JobRunner(
         job_id=1,
         repo_path=Path("/tmp/fake"),
+        specs_path=Path("/tmp/fake-specs"),
         prompt="test prompt",
         max_iterations=10,
         log_buffer=log_buffer,
@@ -40,6 +41,7 @@ async def test_runner_iterates_up_to_max(log_buffer):
     runner = JobRunner(
         job_id=1,
         repo_path=Path("/tmp/fake"),
+        specs_path=Path("/tmp/fake-specs"),
         prompt="test prompt",
         max_iterations=3,
         log_buffer=log_buffer,
@@ -59,6 +61,7 @@ async def test_runner_logs_each_iteration(log_buffer):
     runner = JobRunner(
         job_id=1,
         repo_path=Path("/tmp/fake"),
+        specs_path=Path("/tmp/fake-specs"),
         prompt="test prompt",
         max_iterations=2,
         log_buffer=log_buffer,
@@ -78,6 +81,7 @@ async def test_runner_closes_buffer_on_completion(log_buffer):
     runner = JobRunner(
         job_id=1,
         repo_path=Path("/tmp/fake"),
+        specs_path=Path("/tmp/fake-specs"),
         prompt="test prompt",
         max_iterations=1,
         log_buffer=log_buffer,
