@@ -41,7 +41,6 @@ class JobRunner:
 
                 output = await self._run_agent_iteration(iteration)
 
-                self.log_buffer.append(self.job_id, output)
                 self.log_buffer.append(
                     self.job_id,
                     f"=== Completed iteration {iteration}/{self.max_iterations} ===",
@@ -71,7 +70,8 @@ class JobRunner:
         """Run a single Claude Agent SDK iteration.
 
         Uses claude_agent_sdk to run an agent with filesystem access
-        scoped to self.repo_path.
+        scoped to self.repo_path.  Streams each message to the log buffer
+        in real time and returns the full output for DB persistence.
         """
         from claude_agent_sdk import (
             query, ClaudeAgentOptions, ResultMessage, AssistantMessage, TextBlock,
@@ -89,7 +89,8 @@ class JobRunner:
                 model="claude-sonnet-4-6",
                 allowed_tools=["Read", "Write", "Edit", "Glob", "Grep", "Bash"],
                 permission_mode="acceptEdits",
-                max_turns=10,
+                max_turns=50,
+                setting_sources=["project"],
                 env=clean_env,
             ),
         ):
@@ -97,6 +98,8 @@ class JobRunner:
                 for block in message.content:
                     if isinstance(block, TextBlock):
                         output_parts.append(block.text)
+                        self.log_buffer.append(self.job_id, block.text)
             elif isinstance(message, ResultMessage) and message.result is not None:
                 output_parts.append(message.result)
+                self.log_buffer.append(self.job_id, message.result)
         return "\n".join(output_parts) if output_parts else "No output from agent."
