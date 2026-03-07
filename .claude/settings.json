@@ -1,0 +1,8 @@
+{
+  "enableAllProjectMcpServers": false,
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
+    "CLAUDE_CODE_TASK_LIST_ID": "clean-your-room",
+    "CLAUDE_CODE_ENABLE_TASKS": "1"
+  }
+}
