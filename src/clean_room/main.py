@@ -5,7 +5,7 @@ from fastapi.templating import Jinja2Templates
 from pathlib import Path
 
 from clean_room.config import CLEAN_ROOM_DIR, REPOS_DIR, SPECS_MONOREPO_DIR, DB_PATH
-from clean_room.db import init_db
+from clean_room.db import init_db, get_db
 from clean_room.git_ops import init_specs_monorepo
 from clean_room.routes.dashboard import router as dashboard_router
 from clean_room.routes.prompts import router as prompts_router
@@ -20,6 +20,15 @@ async def lifespan(app: FastAPI):
     SPECS_MONOREPO_DIR.mkdir(parents=True, exist_ok=True)
     await init_db(DB_PATH)
     await init_specs_monorepo(SPECS_MONOREPO_DIR)
+    db = await get_db(DB_PATH)
+    try:
+        await db.execute(
+            "UPDATE jobs SET status='failed', completed_at=datetime('now') "
+            "WHERE status='running'"
+        )
+        await db.commit()
+    finally:
+        await db.close()
     yield
 
 

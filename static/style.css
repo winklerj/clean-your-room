@@ -14,4 +14,16 @@ input[type="text"], input[type="url"], input[type="number"] { width: 100%; paddi
 .status-stopped { background: #fcf8e3; }
 .status-failed { background: #f2dede; }
 .status-pending { background: #eee; }
-.log-stream { background: #1e1e1e; color: #d4d4d4; font-family: monospace; font-size: 0.85em; padding: 1rem; height: 500px; overflow-y: auto; white-space: pre-wrap; word-wrap: break-word; }
+.log-stream { background: #1e1e1e; color: #d4d4d4; font-family: monospace; font-size: 0.85em; padding: 1rem; height: 600px; overflow-y: auto; }
+.log-msg { padding: 0.4rem 0.6rem; margin: 0.2rem 0; border-left: 3px solid transparent; white-space: pre-wrap; word-wrap: break-word; border-radius: 2px; }
+.log-label { font-weight: 700; margin-right: 0.5rem; font-size: 0.8em; text-transform: uppercase; }
+.log-thinking { border-left-color: #888; color: #999; background: rgba(255,255,255,0.03); }
+.log-text { border-left-color: #569cd6; color: #d4d4d4; }
+.log-tool-call { border-left-color: #dcdcaa; color: #dcdcaa; background: rgba(220,220,170,0.05); }
+.log-tool-result { border-left-color: #4ec9b0; color: #9cdcb0; background: rgba(78,201,176,0.05); max-height: 200px; overflow-y: auto; }
+.log-tool-error { border-left-color: #f44747; color: #f48771; background: rgba(244,71,71,0.08); }
+.log-system { border-left-color: #c586c0; color: #c586c0; font-size: 0.8em; }
+.log-task { border-left-color: #ce9178; color: #ce9178; font-size: 0.85em; }
+.log-iteration { border-left-color: #608b4e; color: #608b4e; font-weight: 700; text-align: center; padding: 0.5rem; margin: 0.5rem 0; border-left: none; border-top: 1px solid #608b4e; border-bottom: 1px solid #608b4e; }
+.log-result { border-left-color: #569cd6; color: #d4d4d4; background: rgba(86,156,214,0.08); }
+.log-error { border-left-color: #f44747; color: #f44747; background: rgba(244,71,71,0.1); font-weight: 700; }

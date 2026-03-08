@@ -3,24 +3,7 @@
 {% block content %}
 <p><a href="/repos/{{ job.repo_id }}">&larr; Back to {{ repo.org }}/{{ repo.repo_name }}</a></p>
 <h1>Job #{{ job.id }}</h1>
-<div>
-    <span class="status-badge status-{{ job.status }}">{{ job.status }}</span>
-    Iteration: {{ job.current_iteration }}/{{ job.max_iterations }}
-    | Prompt: {{ prompt_name }}
-    {% if job.feature_description %}| Feature: {{ job.feature_description }}{% endif %}
-</div>
-<div style="margin: 1rem 0;">
-    {% if job.status == 'running' %}
-    <form method="post" action="/jobs/{{ job.id }}/stop" style="display:inline">
-        <button type="submit">Stop</button>
-    </form>
-    {% endif %}
-    {% if job.status in ('stopped', 'failed') %}
-    <form method="post" action="/jobs/{{ job.id }}/restart" style="display:inline">
-        <button type="submit">Restart</button>
-    </form>
-    {% endif %}
-</div>
+{% include "partials/job_status.html" %}
 
 <h2>Log</h2>
 <div class="log-stream"
@@ -29,9 +12,10 @@
      hx-ext="sse"
      sse-connect="/jobs/{{ job.id }}/stream"
      sse-swap="message"
+     sse-close="job-done"
      hx-swap="beforeend"
      {% endif %}>
-    {%- for log in logs %}{{ log.content }}
+    {%- for log in logs %}{{ log.content | safe }}
 {% endfor -%}
 </div>
 
@@ -41,5 +25,14 @@
         log.scrollTop = log.scrollHeight;
     });
     observer.observe(log, { childList: true });
+
+    document.body.addEventListener('jobFinished', () => {
+        // Remove SSE attributes to stop the connection
+        log.removeAttribute('hx-ext');
+        log.removeAttribute('sse-connect');
+        log.removeAttribute('sse-swap');
+        log.removeAttribute('sse-close');
+        htmx.process(log);
+    });
 </script>
 {% endblock %}

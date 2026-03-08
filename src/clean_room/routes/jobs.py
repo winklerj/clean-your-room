@@ -53,6 +53,7 @@ async def _start_job(
             (status, job_id),
         )
         await db.commit()
+        log_buffer.close(job_id)
 
         await commit_specs(
             SPECS_MONOREPO_DIR,
@@ -64,6 +65,7 @@ async def _start_job(
             (job_id,),
         )
         await db.commit()
+        log_buffer.close(job_id)
     finally:
         await db.close()
         active_jobs.pop(job_id, None)
@@ -183,6 +185,25 @@ async def restart_job(job_id: int):
     return RedirectResponse(f"/jobs/{new_id}", status_code=303)
 
 
+@router.get("/{job_id}/status", response_class=HTMLResponse)
+async def job_status(request: Request, job_id: int):
+    from clean_room.main import templates
+    db = await get_db(DB_PATH)
+    try:
+        cursor = await db.execute("SELECT * FROM jobs WHERE id=?", (job_id,))
+        job = await cursor.fetchone()
+        cursor = await db.execute("SELECT name FROM prompts WHERE id=?", (job["prompt_id"],))
+        prompt_row = await cursor.fetchone()
+        response = templates.TemplateResponse("partials/job_status.html", {
+            "request": request, "job": job, "prompt_name": prompt_row[0],
+        })
+        if job["status"] not in ("pending", "running"):
+            response.headers["HX-Trigger"] = "jobFinished"
+        return response
+    finally:
+        await db.close()
+
+
 @router.get("/{job_id}/stream")
 async def job_stream(job_id: int):
     async def event_generator():
@@ -191,5 +212,6 @@ async def job_stream(job_id: int):
         if job_id not in log_buffer._closed:
             async for msg in log_buffer.subscribe(job_id):
                 yield {"data": msg}
+        yield {"event": "job-done", "data": ""}
 
     return EventSourceResponse(event_generator())

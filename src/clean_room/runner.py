@@ -1,8 +1,15 @@
 import asyncio
+import html
 import os
 from pathlib import Path
 
 from clean_room.streaming import LogBuffer
+
+
+def _fmt(css_class: str, label: str, content: str) -> str:
+    """Wrap a log message in a styled HTML div."""
+    safe = html.escape(content)
+    return f'<div class="log-msg {css_class}"><span class="log-label">{label}</span>{safe}</div>'
 
 
 class JobRunner:
@@ -32,20 +39,21 @@ class JobRunner:
             for iteration in range(1, self.max_iterations + 1):
                 if self.cancel_event.is_set():
                     self.log_buffer.append(
-                        self.job_id, f"--- Stopped at iteration {iteration} ---"
+                        self.job_id,
+                        _fmt("log-iteration", "", f"Stopped at iteration {iteration}"),
                     )
                     break
 
                 self.log_buffer.append(
                     self.job_id,
-                    f"=== Starting iteration {iteration}/{self.max_iterations} ===",
+                    _fmt("log-iteration", "", f"Iteration {iteration}/{self.max_iterations}"),
                 )
 
                 output = await self._run_agent_iteration(iteration)
 
                 self.log_buffer.append(
                     self.job_id,
-                    f"=== Completed iteration {iteration}/{self.max_iterations} ===",
+                    _fmt("log-iteration", "", f"Completed iteration {iteration}/{self.max_iterations}"),
                 )
 
                 await db.execute(
@@ -58,15 +66,13 @@ class JobRunner:
                 )
                 await db.commit()
         except Exception as e:
-            self.log_buffer.append(self.job_id, f"ERROR: {e}")
+            self.log_buffer.append(self.job_id, _fmt("log-error", "ERROR", str(e)))
             await db.execute(
                 "UPDATE jobs SET status='failed', completed_at=datetime('now') WHERE id=?",
                 (self.job_id,),
             )
             await db.commit()
             raise
-        finally:
-            self.log_buffer.close(self.job_id)
 
     async def _run_agent_iteration(self, iteration: int) -> str:
         """Run a single Claude Agent SDK iteration.
@@ -76,7 +82,10 @@ class JobRunner:
         Streams each message to the log buffer in real time.
         """
         from claude_agent_sdk import (
-            query, ClaudeAgentOptions, ResultMessage, AssistantMessage, TextBlock,
+            query, ClaudeAgentOptions, ResultMessage, AssistantMessage,
+            UserMessage, SystemMessage, TextBlock, ThinkingBlock,
+            ToolUseBlock, ToolResultBlock,
+            TaskStartedMessage, TaskProgressMessage, TaskNotificationMessage,
         )
 
         clean_env = {
@@ -110,10 +119,48 @@ class JobRunner:
         ):
             if isinstance(message, AssistantMessage):
                 for block in message.content:
-                    if isinstance(block, TextBlock):
-                        output_parts.append(block.text)
-                        self.log_buffer.append(self.job_id, block.text)
+                    if isinstance(block, ThinkingBlock):
+                        formatted = _fmt("log-thinking", "Thinking", block.thinking)
+                        output_parts.append(formatted)
+                        self.log_buffer.append(self.job_id, formatted)
+                    elif isinstance(block, TextBlock):
+                        formatted = _fmt("log-text", "Assistant", block.text)
+                        output_parts.append(formatted)
+                        self.log_buffer.append(self.job_id, formatted)
+                    elif isinstance(block, ToolUseBlock):
+                        formatted = _fmt("log-tool-call", f"Tool: {html.escape(block.name)}", str(block.input))
+                        output_parts.append(formatted)
+                        self.log_buffer.append(self.job_id, formatted)
+            elif isinstance(message, UserMessage):
+                for block in (message.content if isinstance(message.content, list) else []):
+                    if isinstance(block, ToolResultBlock):
+                        if block.is_error:
+                            formatted = _fmt("log-tool-error", "Tool Error", str(block.content))
+                        else:
+                            formatted = _fmt("log-tool-result", "Tool Result", str(block.content))
+                        output_parts.append(formatted)
+                        self.log_buffer.append(self.job_id, formatted)
+            elif isinstance(message, SystemMessage):
+                formatted = _fmt("log-system", f"System ({html.escape(str(message.subtype))})", str(message.data))
+                output_parts.append(formatted)
+                self.log_buffer.append(self.job_id, formatted)
+            elif isinstance(message, TaskStartedMessage):
+                formatted = _fmt("log-task", "Task Started", f"{message.task_id}: {message.description}")
+                output_parts.append(formatted)
+                self.log_buffer.append(self.job_id, formatted)
+            elif isinstance(message, TaskProgressMessage):
+                desc = f"{message.task_id}: {message.description}"
+                if message.last_tool_name:
+                    desc += f" (tool: {message.last_tool_name})"
+                formatted = _fmt("log-task", "Task Progress", desc)
+                output_parts.append(formatted)
+                self.log_buffer.append(self.job_id, formatted)
+            elif isinstance(message, TaskNotificationMessage):
+                formatted = _fmt("log-task", f"Task {message.status.title()}", f"{message.task_id}: {message.summary}")
+                output_parts.append(formatted)
+                self.log_buffer.append(self.job_id, formatted)
             elif isinstance(message, ResultMessage) and message.result is not None:
-                output_parts.append(message.result)
-                self.log_buffer.append(self.job_id, message.result)
+                formatted = _fmt("log-result", "Result", message.result)
+                output_parts.append(formatted)
+                self.log_buffer.append(self.job_id, formatted)
         return "\n".join(output_parts) if output_parts else "No output from agent."
