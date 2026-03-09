@@ -19,10 +19,10 @@ uv sync --extra dev
 ### Run
 
 ```bash
-uv run uvicorn clean_room.main:app --reload
+uv run uvicorn clean_room.main:app --reload --port 8317
 ```
 
-Open [http://localhost:8000](http://localhost:8000) to access the dashboard.
+Open [http://localhost:8317](http://localhost:8317) to access the dashboard.
 
 ### Quick workflow
 

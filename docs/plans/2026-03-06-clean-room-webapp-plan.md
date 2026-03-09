@@ -2156,14 +2156,14 @@ git commit -m "feat: final assembly with all routes and integration test"
 
 **Step 1: Start the server**
 
-Run: `uv run uvicorn clean_room.main:app --reload`
-Expected: Server starts on http://127.0.0.1:8000
+Run: `uv run uvicorn clean_room.main:app --reload --port 8317`
+Expected: Server starts on http://127.0.0.1:8317
 
 **Step 2: Verify all pages load**
 
-- `http://127.0.0.1:8000` — Dashboard with "Add Repo" link
-- `http://127.0.0.1:8000/repos/new` — Add repo form
-- `http://127.0.0.1:8000/prompts` — Two seeded prompts, create/edit/delete works
+- `http://127.0.0.1:8317` — Dashboard with "Add Repo" link
+- `http://127.0.0.1:8317/repos/new` — Add repo form
+- `http://127.0.0.1:8317/prompts` — Two seeded prompts, create/edit/delete works
 
 **Step 3: Test full flow (requires ANTHROPIC_API_KEY)**
 

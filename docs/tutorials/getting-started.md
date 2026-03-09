@@ -25,18 +25,18 @@ uv sync --extra dev
 ## 2. Start the app
 
 ```bash
-uv run uvicorn clean_room.main:app --reload
+uv run uvicorn clean_room.main:app --reload --port 8317
 ```
 
 You should see output ending with:
 
 ```
-INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+INFO:     Uvicorn running on http://127.0.0.1:8317 (Press CTRL+C to quit)
 ```
 
 ## 3. Open the dashboard
 
-Go to [http://localhost:8000](http://localhost:8000) in your browser.
+Go to [http://localhost:8317](http://localhost:8317) in your browser.
 
 You will see the Clean Your Room dashboard with an empty repo list and a link to **Add Repo**.
 

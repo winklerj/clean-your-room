@@ -9,6 +9,10 @@ class GitHubUrl:
     slug: str
     url: str
 
+    @property
+    def ssh_url(self) -> str:
+        return f"git@github.com:{self.org}/{self.repo_name}.git"
+
 
 def parse_github_url(url: str) -> GitHubUrl:
     """Parse a GitHub URL into org, repo_name, and slug."""

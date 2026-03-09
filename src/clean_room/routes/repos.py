@@ -32,7 +32,7 @@ async def add_repo(github_url: str = Form()):
     finally:
         await db.close()
     if not clone_path.exists():
-        await clone_repo(parsed.url, clone_path)
+        await clone_repo(parsed.ssh_url, clone_path)
     return RedirectResponse(f"/repos/{repo_id}", status_code=303)
 
 
