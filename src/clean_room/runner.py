@@ -2,6 +2,7 @@ import asyncio
 import html
 import os
 from pathlib import Path
+from typing import Any
 
 from clean_room.streaming import LogBuffer
 
@@ -74,6 +75,43 @@ class JobRunner:
             await db.commit()
             raise
 
+    def _make_path_guard(self):
+        """Return a can_use_tool callback that restricts file access."""
+        from claude_agent_sdk import (
+            PermissionResultAllow, PermissionResultDeny, ToolPermissionContext,
+        )
+
+        repo = str(self.repo_path.resolve())
+        specs = str(self.specs_path.resolve())
+
+        # Tools that take a file/directory path argument
+        path_params = {
+            "Read": "file_path",
+            "Write": "file_path",
+            "Edit": "file_path",
+            "Glob": "path",
+            "Grep": "path",
+        }
+
+        async def guard(
+            tool_name: str, tool_input: dict[str, Any], ctx: ToolPermissionContext,
+        ) -> PermissionResultAllow | PermissionResultDeny:
+            param = path_params.get(tool_name)
+            if param is None:
+                return PermissionResultAllow()
+            raw = tool_input.get(param)
+            if raw is None:
+                # Glob/Grep default to cwd (specs_path) when path is omitted
+                return PermissionResultAllow()
+            resolved = str(Path(raw).resolve())
+            if resolved.startswith(repo) or resolved.startswith(specs):
+                return PermissionResultAllow()
+            return PermissionResultDeny(
+                message=f"Access denied: path {raw} is outside the allowed directories",
+            )
+
+        return guard
+
     async def _run_agent_iteration(self, iteration: int) -> str:
         """Run a single Claude Agent SDK iteration.
 
@@ -102,9 +140,12 @@ class JobRunner:
             "Do NOT create files in the repository or any other directory."
         )
 
+        async def _prompt_iter():
+            yield {"type": "user", "message": {"role": "user", "content": self.prompt}}
+
         output_parts = []
         async for message in query(
-            prompt=self.prompt,
+            prompt=_prompt_iter(),
             options=ClaudeAgentOptions(
                 cwd=str(self.specs_path),
                 model="claude-sonnet-4-6",
@@ -115,6 +156,7 @@ class JobRunner:
                 max_turns=50,
                 setting_sources=["project"],
                 env=clean_env,
+                can_use_tool=self._make_path_guard(),
             ),
         ):
             if isinstance(message, AssistantMessage):

@@ -59,6 +59,13 @@ async def _start_job(
             SPECS_MONOREPO_DIR,
             f"{'Partial specs' if cancel_event.is_set() else 'Specs'} for {slug}",
         )
+    except asyncio.CancelledError:
+        await db.execute(
+            "UPDATE jobs SET status='stopped', completed_at=datetime('now') WHERE id=?",
+            (job_id,),
+        )
+        await db.commit()
+        log_buffer.close(job_id)
     except Exception:
         await db.execute(
             "UPDATE jobs SET status='failed', completed_at=datetime('now') WHERE id=?",
@@ -138,6 +145,8 @@ async def job_viewer(request: Request, job_id: int):
 async def stop_job(job_id: int):
     if job_id in active_jobs:
         active_jobs[job_id].set()
+    if job_id in running_tasks:
+        running_tasks[job_id].cancel()
     return RedirectResponse(f"/jobs/{job_id}", status_code=303)
 
 

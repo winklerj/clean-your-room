@@ -21,6 +21,10 @@ async def add_repo(github_url: str = Form()):
         existing = await cursor.fetchone()
         if existing:
             return RedirectResponse(f"/repos/{existing[0]}", status_code=303)
+
+        if not clone_path.exists():
+            await clone_repo(parsed.ssh_url, clone_path)
+
         cursor = await db.execute(
             "INSERT INTO repos (github_url, org, repo_name, slug, clone_path) "
             "VALUES (?, ?, ?, ?, ?) RETURNING id",
@@ -31,8 +35,6 @@ async def add_repo(github_url: str = Form()):
         await db.commit()
     finally:
         await db.close()
-    if not clone_path.exists():
-        await clone_repo(parsed.ssh_url, clone_path)
     return RedirectResponse(f"/repos/{repo_id}", status_code=303)
 
 
