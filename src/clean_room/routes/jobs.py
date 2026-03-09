@@ -17,6 +17,26 @@ active_jobs: dict[int, asyncio.Event] = {}
 running_tasks: dict[int, asyncio.Task] = {}
 
 
+async def _update_job_status(db, job_id: int, status: str) -> None:
+    """Update job status and persist any unsaved log buffer content."""
+    # Save buffered logs that weren't persisted (e.g. partial iteration on cancel)
+    history = log_buffer.get_history(job_id)
+    if history:
+        # Delete existing logs and replace with full buffer content
+        # The buffer is the source of truth for everything streamed
+        await db.execute("DELETE FROM job_logs WHERE job_id=?", (job_id,))
+        content = "\n".join(history)
+        await db.execute(
+            "INSERT INTO job_logs (job_id, iteration, content) VALUES (?, ?, ?)",
+            (job_id, 0, content),
+        )
+    await db.execute(
+        "UPDATE jobs SET status=?, completed_at=datetime('now') WHERE id=?",
+        (status, job_id),
+    )
+    await db.commit()
+
+
 async def _start_job(
     job_id: int, repo_path: Path, slug: str, prompt: str, max_iterations: int
 ):
@@ -60,18 +80,10 @@ async def _start_job(
             f"{'Partial specs' if cancel_event.is_set() else 'Specs'} for {slug}",
         )
     except asyncio.CancelledError:
-        await db.execute(
-            "UPDATE jobs SET status='stopped', completed_at=datetime('now') WHERE id=?",
-            (job_id,),
-        )
-        await db.commit()
+        await asyncio.shield(_update_job_status(db, job_id, "stopped"))
         log_buffer.close(job_id)
     except Exception:
-        await db.execute(
-            "UPDATE jobs SET status='failed', completed_at=datetime('now') WHERE id=?",
-            (job_id,),
-        )
-        await db.commit()
+        await asyncio.shield(_update_job_status(db, job_id, "failed"))
         log_buffer.close(job_id)
     finally:
         await db.close()
