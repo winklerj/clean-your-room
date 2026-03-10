@@ -6,6 +6,7 @@
 {% include "partials/job_status.html" %}
 
 <h2>Log</h2>
+<div style="position: relative;">
 <div class="log-stream"
      id="log"
      {% if job.status in ('pending', 'running') %}
@@ -18,16 +19,41 @@
     {%- for log in logs %}{{ log.content | safe }}
 {% endfor -%}
 </div>
+<button id="scroll-btn"
+        onclick="scrollToBottom()"
+        style="display:none; position:absolute; bottom:0.5rem; right:0.5rem;
+               padding:0.25rem 0.6rem; cursor:pointer; opacity:0.85;">↓</button>
+</div>
 
 <script>
     const log = document.getElementById('log');
-    const observer = new MutationObserver(() => {
+    const scrollBtn = document.getElementById('scroll-btn');
+    const THRESHOLD = 50; // px from bottom to be considered "at bottom"
+
+    function isAtBottom() {
+        return log.scrollTop + log.clientHeight >= log.scrollHeight - THRESHOLD;
+    }
+
+    function updateScrollBtn() {
+        scrollBtn.style.display = isAtBottom() ? 'none' : 'block';
+    }
+
+    function scrollToBottom() {
         log.scrollTop = log.scrollHeight;
+        scrollBtn.style.display = 'none';
+    }
+
+    const observer = new MutationObserver(() => {
+        if (isAtBottom()) {
+            log.scrollTop = log.scrollHeight;
+        }
+        updateScrollBtn();
     });
     observer.observe(log, { childList: true });
 
+    log.addEventListener('scroll', updateScrollBtn);
+
     document.body.addEventListener('jobFinished', () => {
-        // Remove SSE attributes to stop the connection
         log.removeAttribute('hx-ext');
         log.removeAttribute('sse-connect');
         log.removeAttribute('sse-swap');
