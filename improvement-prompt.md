@@ -1,6 +1,9 @@
 Study the existing specs/*
 
-Identify one specification for the clean room deep research specifications and improve the specification file. Persist jj changes when done.
+Identify one specification for the clean room deep research specifications and improve the specification file. We will be creating a CLI deep research CLI tool from the specifications. Persist jj changes when done.
+
+Important:
+Describe behavioral contracts and constraints, not implementation. Do not reference variable names, function names, file paths, migration IDs, or internal state fields from the source. A reader should be able to build a compatible system from the spec without reproducing the original code's structure or naming.
 
 Focus on ONE specification
 Include:
