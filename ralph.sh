@@ -36,10 +36,10 @@ Important:
 
 Focus on ONE item per iteration. Make the code production-ready.'
 
-# if [ ! -f "$PLAN_FILE" ]; then
-#     echo "Error: Plan file not found: $PLAN_FILE"
-#     exit 1
-# fi
+if [ ! -f "$PLAN_FILE" ]; then
+    echo "Error: Plan file not found: $PLAN_FILE"
+    exit 1
+fi
 
 # Load prompt from file or use default
 if [ -f "$PROMPT_FILE" ]; then
