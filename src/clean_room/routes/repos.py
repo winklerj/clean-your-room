@@ -31,6 +31,7 @@ async def add_repo(github_url: str = Form()):
             (parsed.url, parsed.org, parsed.repo_name, parsed.slug, str(clone_path)),
         )
         row = await cursor.fetchone()
+        assert row is not None
         repo_id = row[0]
         await db.commit()
     finally:

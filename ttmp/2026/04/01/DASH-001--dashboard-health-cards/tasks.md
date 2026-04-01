@@ -23,5 +23,5 @@
 - [x] `uv run ruff check src/ tests/` passes
 - [x] `uv run pytest tests/test_routes_dashboard.py -v` — 5/5 pass
 - [x] `uv run mypy src/clean_room/routes/dashboard.py --ignore-missing-imports` — 0 errors in dashboard.py
-- [ ] Pre-existing: 23 mypy errors in db.py/jobs.py/repos.py (out of scope)
+- [x] Pre-existing: 23 mypy errors in db.py/jobs.py/repos.py — FIXED (assert for guaranteed rows, HTTPException 404 for URL lookups)
 - [ ] Pre-existing: test_runner_closes_buffer_on_completion failure (out of scope)

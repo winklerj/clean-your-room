@@ -1,6 +1,6 @@
 import asyncio
 from pathlib import Path
-from fastapi import APIRouter, Request, Form
+from fastapi import APIRouter, HTTPException, Request, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sse_starlette.sse import EventSourceResponse
 
@@ -106,13 +106,16 @@ async def create_job(
             (repo_id, prompt_id, feature_description or None, max_iterations),
         )
         row = await cursor.fetchone()
+        assert row is not None
         job_id = row[0]
         await db.commit()
 
         cursor = await db.execute("SELECT clone_path, slug FROM repos WHERE id=?", (repo_id,))
         repo_row = await cursor.fetchone()
+        assert repo_row is not None
         cursor = await db.execute("SELECT template FROM prompts WHERE id=?", (prompt_id,))
         prompt_row = await cursor.fetchone()
+        assert prompt_row is not None
 
         repo_path = Path(repo_row[0])
         slug = repo_row[1]
@@ -137,10 +140,13 @@ async def job_viewer(request: Request, job_id: int):
     try:
         cursor = await db.execute("SELECT * FROM jobs WHERE id=?", (job_id,))
         job = await cursor.fetchone()
+        if not job:
+            raise HTTPException(404, "Job not found")
         cursor = await db.execute("SELECT * FROM repos WHERE id=?", (job["repo_id"],))
         repo = await cursor.fetchone()
         cursor = await db.execute("SELECT name FROM prompts WHERE id=?", (job["prompt_id"],))
         prompt_row = await cursor.fetchone()
+        assert prompt_row is not None
         cursor = await db.execute(
             "SELECT * FROM job_logs WHERE job_id=? ORDER BY id", (job_id,),
         )
@@ -169,6 +175,8 @@ async def restart_job(job_id: int):
     try:
         cursor = await db.execute("SELECT * FROM jobs WHERE id=?", (job_id,))
         old = await cursor.fetchone()
+        if not old:
+            raise HTTPException(404, "Job not found")
         cursor = await db.execute(
             "INSERT INTO jobs (repo_id, prompt_id, feature_description, max_iterations) "
             "VALUES (?, ?, ?, ?) RETURNING id",
@@ -176,6 +184,7 @@ async def restart_job(job_id: int):
              old["max_iterations"]),
         )
         row = await cursor.fetchone()
+        assert row is not None
         new_id = row[0]
         await db.commit()
 
@@ -183,10 +192,12 @@ async def restart_job(job_id: int):
             "SELECT clone_path, slug FROM repos WHERE id=?", (old["repo_id"],),
         )
         repo_row = await cursor.fetchone()
+        assert repo_row is not None
         cursor = await db.execute(
             "SELECT template FROM prompts WHERE id=?", (old["prompt_id"],),
         )
         prompt_row = await cursor.fetchone()
+        assert prompt_row is not None
 
         repo_path = Path(repo_row[0])
         slug = repo_row[1]
@@ -213,8 +224,11 @@ async def job_status(request: Request, job_id: int):
     try:
         cursor = await db.execute("SELECT * FROM jobs WHERE id=?", (job_id,))
         job = await cursor.fetchone()
+        if not job:
+            raise HTTPException(404, "Job not found")
         cursor = await db.execute("SELECT name FROM prompts WHERE id=?", (job["prompt_id"],))
         prompt_row = await cursor.fetchone()
+        assert prompt_row is not None
         response = templates.TemplateResponse("partials/job_status.html", {
             "request": request, "job": job, "prompt_name": prompt_row[0],
         })

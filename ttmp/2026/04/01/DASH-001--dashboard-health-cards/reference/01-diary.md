@@ -16,6 +16,12 @@ RelatedFiles:
     - Path: static/style.css
     - Path: tests/test_routes_dashboard.py
       Note: Added 5 tests with shared db_path fixture and seed helpers
+    - Path: src/clean_room/routes/jobs.py
+      Note: Fixed 21 mypy Row|None errors with assert/HTTPException(404)
+    - Path: src/clean_room/routes/repos.py
+      Note: Fixed 1 mypy Row|None error with assert
+    - Path: src/clean_room/db.py
+      Note: Fixed 1 mypy Row|None error with assert
 ExternalSources: []
 Summary: Implementation diary for dashboard health cards feature
 LastUpdated: 2026-04-01T18:14:40.020579-04:00
@@ -75,12 +81,56 @@ Implemented the full dashboard health cards feature in one pass across three pha
 ### What should be done in the future
 - Add auto-refresh or HTMX polling for the dashboard (the plan explicitly defers this)
 - Consider indexing `jobs(repo_id, status, id DESC)` if dashboard load time becomes noticeable
+- Fix `test_runner_closes_buffer_on_completion` — runner doesn't call `log_buffer.close()` when `_run_agent_iteration` is mocked (the mock skips the real iteration loop that triggers close)
 
 ### Code review instructions
 - Start at `src/clean_room/routes/dashboard.py` — the two SQL queries are the core change
 - Then `src/clean_room/templates/dashboard.html` — verify template variables match route context
 - Then `tests/test_routes_dashboard.py` — note the `db_path` fixture fix vs the plan
 - Validate: `uv run pytest tests/test_routes_dashboard.py -v && uv run ruff check src/ tests/`
+
+## Step 2: Fix 23 Pre-existing Mypy Errors (Row | None indexing)
+
+### Prompt Context
+
+**User prompt (verbatim):** Same template — "implement the next incomplete task ready to be implemented from the task list."
+
+**Assistant interpretation:** All in-scope DASH-001 tasks complete; the next unchecked item is the pre-existing mypy errors across db.py, repos.py, and jobs.py.
+
+**Inferred user intent:** Clean up the type safety debt so the codebase passes `mypy src/` with zero errors.
+
+### What I did
+- **db.py** (1 error): `SELECT COUNT(*)` always returns a row → added `assert row is not None` before indexing.
+- **repos.py** (1 error): `INSERT ... RETURNING id` always returns a row → added `assert row is not None`.
+- **jobs.py** (21 errors): Two patterns:
+  - **Guaranteed rows** (INSERT RETURNING, FK-constrained secondary lookups): `assert row is not None`
+  - **URL-parameter lookups** (`/{job_id}` in `job_viewer`, `restart_job`, `job_status`): `if not job: raise HTTPException(404, "Job not found")` — returns proper 404 instead of crashing with TypeError on None.
+
+### Why
+- All 23 errors were the same mypy diagnostic: `Value of type "Row | None" is not indexable [index]`. `cursor.fetchone()` returns `Row | None` but the code assumed non-None everywhere.
+
+### What worked
+- mypy: 23 → 0 errors
+- ruff: all checks passed
+- tests: 36/37 pass (same pre-existing `test_runner_closes_buffer_on_completion` failure)
+
+### What didn't work
+- Nothing — straightforward fix, all passed on first run.
+
+### What I learned
+- **Two levels of null handling for fetchone:** `assert` is right for rows that SQL guarantees exist (COUNT, INSERT RETURNING, FK lookups). `HTTPException(404)` is right for user-supplied IDs that might not exist — this is a real behavior improvement, not just type-narrowing.
+- **aiosqlite's `Row | None` return type from fetchone is correct per the DB-API spec** — even though SQLite's `SELECT COUNT(*)` always returns a row, the type stub can't know that. `assert` is the idiomatic way to narrow this.
+
+### What was tricky to build
+- Nothing — the pattern was mechanical. The only judgment call was choosing `assert` vs `HTTPException(404)` per-site.
+
+### What warrants a second pair of eyes
+- The `HTTPException` import was added to `jobs.py` — verify no other imports were disrupted.
+- Confirm `assert` is acceptable for INSERT RETURNING (it is — these rows are guaranteed by the SQL engine, and `assert` gives a clear error if a truly impossible state occurs).
+
+### Code review instructions
+- Check `jj diff` — every change is either `assert row is not None` or `if not row: raise HTTPException(404, ...)` after a `fetchone()` call.
+- Validate: `uv run mypy src/ --ignore-missing-imports && uv run pytest tests/ -v && uv run ruff check src/ tests/`
 
 ### Technical details
 - Stats query: `SELECT status, COUNT(*) FROM jobs GROUP BY status` → dict like `{"running": 2, "completed": 5}`

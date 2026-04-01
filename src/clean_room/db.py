@@ -86,7 +86,9 @@ async def init_db(db_path: Path) -> None:
         await db.execute("PRAGMA foreign_keys=ON")
         await db.executescript(SCHEMA)
         cursor = await db.execute("SELECT COUNT(*) FROM prompts")
-        count = (await cursor.fetchone())[0]
+        row = await cursor.fetchone()
+        assert row is not None
+        count = row[0]
         if count == 0:
             for name, template in DEFAULT_PROMPTS:
                 await db.execute(
