@@ -2,12 +2,38 @@
 {% block title %}Dashboard - Clean Room{% endblock %}
 {% block content %}
 <h1>Clean Room</h1>
+
+<div class="stats-cards">
+    <div class="stat-card stat-card-total">
+        <div class="stat-number">{{ total_repos }}</div>
+        <div class="stat-label">Total Repos</div>
+    </div>
+    <div class="stat-card stat-card-running">
+        <div class="stat-number">{{ job_stats.get('running', 0) }}</div>
+        <div class="stat-label">Running</div>
+    </div>
+    <div class="stat-card stat-card-completed">
+        <div class="stat-number">{{ job_stats.get('completed', 0) }}</div>
+        <div class="stat-label">Completed</div>
+    </div>
+    <div class="stat-card stat-card-failed">
+        <div class="stat-number">{{ job_stats.get('failed', 0) }}</div>
+        <div class="stat-label">Failed</div>
+    </div>
+</div>
+
 <p><a href="/repos/new">Add Repo</a></p>
 
 {% if repos %}
 <table>
     <thead>
-        <tr><th>Repo</th><th>Last Job</th><th>Last Run</th></tr>
+        <tr>
+            <th>Repo</th>
+            <th>Last Job</th>
+            <th>Progress</th>
+            <th>Specs</th>
+            <th></th>
+        </tr>
     </thead>
     <tbody>
         {% for repo in repos %}
@@ -20,7 +46,32 @@
                 <span class="status-badge status-pending">no jobs</span>
                 {% endif %}
             </td>
-            <td>{{ repo.last_run or "-" }}</td>
+            <td>
+                {% if repo.last_iteration is not none and repo.last_max_iterations %}
+                <div class="progress-bar">
+                    <div class="progress-fill progress-{{ repo.last_status }}"
+                         style="width: {{ (repo.last_iteration / repo.last_max_iterations * 100) | round }}%">
+                    </div>
+                </div>
+                <span class="progress-text">{{ repo.last_iteration }}/{{ repo.last_max_iterations }}</span>
+                {% else %}
+                -
+                {% endif %}
+            </td>
+            <td>
+                {% if repo.last_completed_at %}
+                <span class="freshness">{{ repo.last_completed_at }}</span>
+                {% else %}
+                <span class="freshness freshness-none">no specs yet</span>
+                {% endif %}
+            </td>
+            <td>
+                {% if repo.last_job_id %}
+                <form method="post" action="/jobs/{{ repo.last_job_id }}/restart" style="display:inline">
+                    <button type="submit" class="btn-run-again">Run again</button>
+                </form>
+                {% endif %}
+            </td>
         </tr>
         {% endfor %}
     </tbody>
