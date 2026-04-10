@@ -6,6 +6,8 @@ import json
 from typing import Any
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 from httpx import ASGITransport, AsyncClient
 
 from build_your_room.db import get_pool
@@ -85,16 +87,20 @@ async def _seed_task(
     parent_task_id: int | None = None,
     diary_entry: str | None = None,
     estimated_complexity: str | None = None,
+    preconditions_json: str = "[]",
+    postconditions_json: str = "[]",
 ) -> int:
     pool = get_pool()
     async with pool.connection() as conn:
         cur = await conn.execute(
             "INSERT INTO htn_tasks "
             "(pipeline_id, parent_task_id, name, description, task_type, "
-            " status, ordering, diary_entry, estimated_complexity) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
+            " status, ordering, diary_entry, estimated_complexity, "
+            " preconditions_json, postconditions_json) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id",
             (pipeline_id, parent_task_id, name, f"Description of {name}",
-             task_type, status, ordering, diary_entry, estimated_complexity),
+             task_type, status, ordering, diary_entry, estimated_complexity,
+             preconditions_json, postconditions_json),
         )
         row: dict[str, Any] | None = await cur.fetchone()  # type: ignore[assignment]
         assert row is not None
@@ -416,3 +422,317 @@ async def test_tasks_page_pipeline_header(client):
     assert "task-def-hdr" in resp.text
     assert "task-repo-hdr" in resp.text
     assert "running" in resp.text
+
+
+# ---------------------------------------------------------------------------
+# Tests — precondition/postcondition display
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_tasks_page_preconditions_shown(client):
+    """Tasks with preconditions_json display their preconditions.
+
+    Invariant: preconditions are rendered with type badge and description.
+    Context: spec line 958 requires "precondition/postcondition status" on task nodes.
+    """
+    repo_id = await _seed_repo("-pre")
+    def_id = await _seed_def("-pre")
+    pid = await _seed_pipeline(repo_id, def_id)
+
+    preconditions = json.dumps([
+        {"type": "file_exists", "path": "src/auth.py",
+         "description": "Auth module must exist"},
+    ])
+    await _seed_task(pid, "auth-task", status="ready", ordering=0,
+                     preconditions_json=preconditions)
+
+    resp = await client.get(f"/pipelines/{pid}/tasks")
+    assert resp.status_code == 200
+    assert "Preconditions:" in resp.text
+    assert "file_exists" in resp.text
+    assert "Auth module must exist" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_tasks_page_postconditions_shown(client):
+    """Tasks with postconditions_json display their postconditions.
+
+    Invariant: postconditions are rendered with type badge and description.
+    Context: spec line 958 requires "precondition/postcondition status" on task nodes.
+    """
+    repo_id = await _seed_repo("-post")
+    def_id = await _seed_def("-post")
+    pid = await _seed_pipeline(repo_id, def_id)
+
+    postconditions = json.dumps([
+        {"type": "tests_pass", "pattern": "tests/test_auth*",
+         "description": "Auth tests must pass"},
+        {"type": "lint_clean", "scope": "src/auth/",
+         "description": "Auth module lints clean"},
+    ])
+    await _seed_task(pid, "impl-auth", status="in_progress", ordering=0,
+                     postconditions_json=postconditions)
+
+    resp = await client.get(f"/pipelines/{pid}/tasks")
+    assert resp.status_code == 200
+    assert "Postconditions:" in resp.text
+    assert "tests_pass" in resp.text
+    assert "Auth tests must pass" in resp.text
+    assert "lint_clean" in resp.text
+    assert "Auth module lints clean" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_tasks_page_completed_task_conditions_passed(client):
+    """Completed tasks show checkmarks on both preconditions and postconditions.
+
+    Invariant: completed task conditions display passed indicator (checkmark).
+    Context: a completed task implies all conditions were satisfied.
+    """
+    repo_id = await _seed_repo("-cond-pass")
+    def_id = await _seed_def("-cond-pass")
+    pid = await _seed_pipeline(repo_id, def_id)
+
+    preconditions = json.dumps([
+        {"type": "file_exists", "path": "src/db.py",
+         "description": "DB module exists"},
+    ])
+    postconditions = json.dumps([
+        {"type": "tests_pass", "pattern": "tests/test_db*",
+         "description": "DB tests pass"},
+    ])
+    await _seed_task(pid, "db-task", status="completed", ordering=0,
+                     preconditions_json=preconditions,
+                     postconditions_json=postconditions)
+
+    resp = await client.get(f"/pipelines/{pid}/tasks")
+    assert resp.status_code == 200
+    assert "condition-passed" in resp.text
+    assert "condition-pending" not in resp.text
+
+
+@pytest.mark.asyncio
+async def test_tasks_page_ready_task_conditions_pending(client):
+    """Ready tasks show pending indicators on postconditions.
+
+    Invariant: not-yet-executed task postconditions display pending indicator.
+    Context: preconditions should be satisfied (task is ready) but postconditions
+    have not been verified yet.
+    """
+    repo_id = await _seed_repo("-cond-pend")
+    def_id = await _seed_def("-cond-pend")
+    pid = await _seed_pipeline(repo_id, def_id)
+
+    postconditions = json.dumps([
+        {"type": "tests_pass", "description": "Tests pass"},
+    ])
+    await _seed_task(pid, "pending-task", status="ready", ordering=0,
+                     postconditions_json=postconditions)
+
+    resp = await client.get(f"/pipelines/{pid}/tasks")
+    assert resp.status_code == 200
+    assert "condition-pending" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_tasks_page_failed_task_postconditions_failed(client):
+    """Failed tasks show failed indicators on postconditions.
+
+    Invariant: failed task postconditions display failed indicator (X mark).
+    Context: a failed task implies postconditions were not met.
+    """
+    repo_id = await _seed_repo("-cond-fail")
+    def_id = await _seed_def("-cond-fail")
+    pid = await _seed_pipeline(repo_id, def_id)
+
+    postconditions = json.dumps([
+        {"type": "tests_pass", "description": "Tests pass"},
+    ])
+    await _seed_task(pid, "failed-task", status="failed", ordering=0,
+                     postconditions_json=postconditions)
+
+    resp = await client.get(f"/pipelines/{pid}/tasks")
+    assert resp.status_code == 200
+    assert "condition-failed" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_tasks_page_no_conditions_no_section(client):
+    """Tasks with empty conditions don't render conditions sections.
+
+    Invariant: tasks with empty [] conditions don't show Preconditions/Postconditions labels.
+    Context: avoid visual noise for tasks without explicit conditions.
+    """
+    repo_id = await _seed_repo("-nocond")
+    def_id = await _seed_def("-nocond")
+    pid = await _seed_pipeline(repo_id, def_id)
+
+    await _seed_task(pid, "simple-task", status="ready", ordering=0)
+
+    resp = await client.get(f"/pipelines/{pid}/tasks")
+    assert resp.status_code == 200
+    assert "simple-task" in resp.text
+    assert "Preconditions:" not in resp.text
+    assert "Postconditions:" not in resp.text
+
+
+@pytest.mark.asyncio
+async def test_tasks_page_conditions_on_pipeline_detail(client):
+    """Pipeline detail page also renders conditions on HTN task nodes.
+
+    Invariant: pipeline detail page shows the same condition info as the
+    standalone tasks page, since both use the same partial template.
+    Context: spec line 958 applies to the pipeline detail HTN task tree too.
+    """
+    repo_id = await _seed_repo("-detail-cond")
+    def_id = await _seed_def("-detail-cond")
+    pid = await _seed_pipeline(repo_id, def_id)
+
+    postconditions = json.dumps([
+        {"type": "lint_clean", "description": "Code lints clean"},
+    ])
+    await _seed_task(pid, "lint-task", status="completed", ordering=0,
+                     postconditions_json=postconditions)
+
+    resp = await client.get(f"/pipelines/{pid}")
+    assert resp.status_code == 200
+    assert "Postconditions:" in resp.text
+    assert "lint_clean" in resp.text
+    assert "Code lints clean" in resp.text
+    assert "condition-passed" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_tasks_page_multiple_conditions_all_rendered(client):
+    """Tasks with multiple conditions show all of them.
+
+    Invariant: every condition in the JSON array is rendered in the HTML.
+    Context: tasks commonly have 2-4 postconditions that all need visibility.
+    """
+    repo_id = await _seed_repo("-multi")
+    def_id = await _seed_def("-multi")
+    pid = await _seed_pipeline(repo_id, def_id)
+
+    postconditions = json.dumps([
+        {"type": "file_exists", "description": "Module exists"},
+        {"type": "tests_pass", "description": "Tests pass"},
+        {"type": "lint_clean", "description": "Lint clean"},
+    ])
+    await _seed_task(pid, "multi-cond", status="in_progress", ordering=0,
+                     postconditions_json=postconditions)
+
+    resp = await client.get(f"/pipelines/{pid}/tasks")
+    assert resp.status_code == 200
+    assert resp.text.count("condition-type-badge") >= 3
+    assert "Module exists" in resp.text
+    assert "Tests pass" in resp.text
+    assert "Lint clean" in resp.text
+
+
+# ---------------------------------------------------------------------------
+# Unit tests — _parse_conditions helper
+# ---------------------------------------------------------------------------
+
+from build_your_room.routes.pipelines import _parse_conditions  # noqa: E402
+
+
+def test_parse_conditions_valid_json():
+    """_parse_conditions parses well-formed condition JSON.
+
+    Invariant: valid JSON with type+description yields matching dicts.
+    Context: the helper powers condition display in the template.
+    """
+    raw = json.dumps([
+        {"type": "file_exists", "path": "foo.py", "description": "Foo exists"},
+        {"type": "tests_pass", "description": "Tests pass"},
+    ])
+    result = _parse_conditions(raw)
+    assert len(result) == 2
+    assert result[0] == {"type": "file_exists", "description": "Foo exists"}
+    assert result[1] == {"type": "tests_pass", "description": "Tests pass"}
+
+
+def test_parse_conditions_empty():
+    """_parse_conditions returns empty list for empty input.
+
+    Invariant: empty string, '[]', None all produce [].
+    Context: most tasks have no explicit conditions; the helper must be safe.
+    """
+    assert _parse_conditions("[]") == []
+    assert _parse_conditions("") == []
+    assert _parse_conditions("null") == []
+
+
+def test_parse_conditions_invalid_json():
+    """_parse_conditions returns empty list for malformed JSON.
+
+    Invariant: invalid JSON never crashes, just returns [].
+    Context: defensive parsing for potentially corrupt DB data.
+    """
+    assert _parse_conditions("{bad json}") == []
+    assert _parse_conditions("not json at all") == []
+
+
+def test_parse_conditions_missing_description_falls_back_to_type():
+    """_parse_conditions uses type as description fallback.
+
+    Invariant: when 'description' is missing, the 'type' field is used instead.
+    Context: some conditions may omit the description field.
+    """
+    raw = json.dumps([{"type": "lint_clean", "scope": "src/"}])
+    result = _parse_conditions(raw)
+    assert len(result) == 1
+    assert result[0]["description"] == "lint_clean"
+
+
+def test_parse_conditions_skips_non_dict_entries():
+    """_parse_conditions skips non-dict items in the conditions array.
+
+    Invariant: only dict entries are included; strings, numbers, nulls are skipped.
+    Context: defensive handling of malformed condition arrays.
+    """
+    raw = json.dumps([
+        {"type": "file_exists", "description": "Valid"},
+        "not a dict",
+        42,
+        None,
+    ])
+    result = _parse_conditions(raw)
+    assert len(result) == 1
+    assert result[0]["description"] == "Valid"
+
+
+# ---------------------------------------------------------------------------
+# Property-based test — conditions parsing roundtrip
+# ---------------------------------------------------------------------------
+
+_condition_types = st.sampled_from([
+    "file_exists", "tests_pass", "lint_clean", "type_check",
+    "task_completed", "custom_verifier",
+])
+
+_condition_st = st.fixed_dictionaries({
+    "type": _condition_types,
+    "description": st.text(
+        min_size=1, max_size=80,
+        alphabet=st.characters(blacklist_categories=("Cs",)),
+    ),
+})
+
+
+@given(conditions=st.lists(_condition_st, min_size=0, max_size=10))
+@settings(max_examples=50)
+def test_parse_conditions_roundtrip(conditions: list[dict[str, str]]):
+    """_parse_conditions preserves type and description for valid conditions.
+
+    Invariant: for any list of well-formed condition dicts, parsing the
+    JSON-serialized form returns the same type and description values.
+    Context: property-based verification that the parser is lossless.
+    """
+    raw = json.dumps(conditions)
+    parsed = _parse_conditions(raw)
+    assert len(parsed) == len(conditions)
+    for orig, result in zip(conditions, parsed):
+        assert result["type"] == orig["type"]
+        assert result["description"] == orig["description"]

@@ -309,6 +309,17 @@ input[type="text"], input[type="url"], input[type="number"] { width: 100%; paddi
 .task-checkpoint { color: #888; font-size: 0.85em; }
 .task-diary { margin-top: 0.3rem; }
 .diary-content { padding: 0.4rem; background: #f6f8fa; border-radius: 4px; font-size: 0.9em; white-space: pre-wrap; }
+/* HTN task conditions (preconditions/postconditions) */
+.task-conditions { margin-top: 0.3rem; }
+.conditions-label { font-weight: 600; font-size: 0.85em; color: #444; }
+.conditions-list { list-style: none; margin: 0.2rem 0 0 0; padding: 0; }
+.condition-item { display: flex; align-items: center; gap: 0.4rem; padding: 0.1rem 0; font-size: 0.9em; }
+.condition-type-badge { display: inline-block; font-size: 0.8em; padding: 0.05rem 0.35rem; border-radius: 3px; background: #e8e8e8; color: #555; font-family: monospace; }
+.condition-desc { color: #555; }
+.condition-status { font-weight: 700; }
+.condition-passed { color: #27ae60; }
+.condition-failed { color: #e74c3c; }
+.condition-pending { color: #999; }
 .task-decision-action { margin-top: 0.3rem; }
 .btn-decision { font-size: 0.85em; color: #8e44ad; text-decoration: none; font-weight: 600; }
 .btn-decision:hover { text-decoration: underline; }

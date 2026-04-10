@@ -237,6 +237,29 @@ async def resume_pipeline_html(
 # ---------------------------------------------------------------------------
 
 
+def _parse_conditions(raw: str) -> list[dict[str, str]]:
+    """Parse a conditions JSON string into a display-friendly list.
+
+    Each returned dict has 'type' and 'description' keys.
+    Returns an empty list on parse failure or empty input.
+    """
+    try:
+        conditions = json.loads(raw) if raw else []
+    except (json.JSONDecodeError, TypeError):
+        return []
+    if not isinstance(conditions, list):
+        return []
+    result: list[dict[str, str]] = []
+    for c in conditions:
+        if not isinstance(c, dict):
+            continue
+        result.append({
+            "type": str(c.get("type", "unknown")),
+            "description": str(c.get("description", c.get("type", ""))),
+        })
+    return result
+
+
 def _build_task_tree(
     tasks: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
@@ -244,11 +267,14 @@ def _build_task_tree(
 
     Root tasks (parent_task_id IS NULL) are top-level.
     Each task gets a 'children' key with nested subtasks.
+    Parses preconditions_json/postconditions_json for display.
     """
     by_id: dict[int, dict[str, Any]] = {}
     for t in tasks:
         t["children"] = []
         t["status_class"] = _TASK_STATUS_CLASS.get(t["status"], "task-not-ready")
+        t["preconditions"] = _parse_conditions(t.get("preconditions_json", "[]"))
+        t["postconditions"] = _parse_conditions(t.get("postconditions_json", "[]"))
         by_id[t["id"]] = t
 
     roots: list[dict[str, Any]] = []

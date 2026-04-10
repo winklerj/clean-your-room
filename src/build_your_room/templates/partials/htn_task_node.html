@@ -28,6 +28,46 @@
             <span class="task-checkpoint">Checkpoint: <code>{{ task.checkpoint_rev[:12] }}</code></span>
             {% endif %}
 
+            {% if task.preconditions %}
+            <div class="task-conditions task-preconditions">
+                <span class="conditions-label">Preconditions:</span>
+                <ul class="conditions-list">
+                    {% for cond in task.preconditions %}
+                    <li class="condition-item">
+                        <span class="condition-type-badge">{{ cond.type }}</span>
+                        <span class="condition-desc">{{ cond.description }}</span>
+                        {% if task.status in ['completed', 'in_progress'] %}
+                        <span class="condition-status condition-passed" title="Satisfied">&#x2713;</span>
+                        {% else %}
+                        <span class="condition-status condition-pending" title="Pending">&#x25CB;</span>
+                        {% endif %}
+                    </li>
+                    {% endfor %}
+                </ul>
+            </div>
+            {% endif %}
+
+            {% if task.postconditions %}
+            <div class="task-conditions task-postconditions">
+                <span class="conditions-label">Postconditions:</span>
+                <ul class="conditions-list">
+                    {% for cond in task.postconditions %}
+                    <li class="condition-item">
+                        <span class="condition-type-badge">{{ cond.type }}</span>
+                        <span class="condition-desc">{{ cond.description }}</span>
+                        {% if task.status == 'completed' %}
+                        <span class="condition-status condition-passed" title="Passed">&#x2713;</span>
+                        {% elif task.status == 'failed' %}
+                        <span class="condition-status condition-failed" title="Failed">&#x2717;</span>
+                        {% else %}
+                        <span class="condition-status condition-pending" title="Pending">&#x25CB;</span>
+                        {% endif %}
+                    </li>
+                    {% endfor %}
+                </ul>
+            </div>
+            {% endif %}
+
             {% if task.diary_entry %}
             <div class="task-diary">
                 <details>
