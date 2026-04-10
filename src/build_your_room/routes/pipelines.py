@@ -20,9 +20,9 @@ _TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled", "killed"})
 # Status → CSS color class mapping for HTN tasks
 _TASK_STATUS_CLASS = {
     "completed": "task-completed",
-    "in_progress": "task-in_progress",
+    "in_progress": "task-in-progress",
     "ready": "task-ready",
-    "not_ready": "task-not_ready",
+    "not_ready": "task-not-ready",
     "blocked": "task-blocked",
     "failed": "task-failed",
     "skipped": "task-skipped",
@@ -273,6 +273,9 @@ def _build_task_tree(
     for t in tasks:
         t["children"] = []
         t["status_class"] = _TASK_STATUS_CLASS.get(t["status"], "task-not-ready")
+        # Decision-type tasks get pink "needs human" coloring (spec line 958)
+        if t.get("task_type") == "decision" and t.get("status") != "completed":
+            t["status_class"] = "task-decision"
         t["preconditions"] = _parse_conditions(t.get("preconditions_json", "[]"))
         t["postconditions"] = _parse_conditions(t.get("postconditions_json", "[]"))
         by_id[t["id"]] = t

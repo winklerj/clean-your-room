@@ -297,6 +297,7 @@ input[type="text"], input[type="url"], input[type="number"] { width: 100%; paddi
 .htn-task-node.task-blocked { border-left-color: #f0ad4e; }
 .htn-task-node.task-failed { border-left-color: #d9534f; }
 .htn-task-node.task-skipped { border-left-color: #ccc; }
+.htn-task-node.task-decision { border-left-color: #e91e63; }
 .htn-task-header { padding: 0.3rem 0; }
 .task-name { font-weight: 600; margin-right: 0.3rem; }
 .task-type-badge { font-size: 0.75em; padding: 0.1rem 0.4rem; border-radius: 3px; background: #f0f0f0; color: #666; }

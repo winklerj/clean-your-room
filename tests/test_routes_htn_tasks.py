@@ -631,6 +631,152 @@ async def test_tasks_page_multiple_conditions_all_rendered(client):
 
 
 # ---------------------------------------------------------------------------
+# Tests — Decision task pink coloring + status class hyphenation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_tasks_page_decision_task_pink_class(client):
+    """Decision-type tasks get task-decision CSS class on the tasks page.
+
+    Invariant: decision tasks with status != completed get pink border class.
+    Context: spec line 958 requires 'pink=needs human' for decision tasks.
+    """
+    repo_id = await _seed_repo()
+    def_id = await _seed_def()
+    pid = await _seed_pipeline(repo_id, def_id)
+    await _seed_task(pid, "Choose DB", task_type="decision", status="blocked", ordering=0)
+
+    resp = await client.get(f"/pipelines/{pid}/tasks")
+    assert resp.status_code == 200
+    assert "task-decision" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_tasks_page_decision_completed_uses_green(client):
+    """Completed decision tasks use task-completed class, not task-decision.
+
+    Invariant: once resolved, decision tasks revert to green (completed) coloring.
+    Context: pink is only for unresolved decision tasks needing human input.
+    """
+    repo_id = await _seed_repo()
+    def_id = await _seed_def()
+    pid = await _seed_pipeline(repo_id, def_id)
+    await _seed_task(
+        pid, "Decided DB", task_type="decision", status="completed", ordering=0
+    )
+
+    resp = await client.get(f"/pipelines/{pid}/tasks")
+    assert resp.status_code == 200
+    assert "task-completed" in resp.text
+    assert "task-decision" not in resp.text
+
+
+@pytest.mark.asyncio
+async def test_tasks_page_in_progress_hyphenated_class(client):
+    """In-progress status maps to hyphenated CSS class task-in-progress.
+
+    Invariant: status classes use hyphens (CSS convention), not underscores.
+    Context: fixes mismatch where Python generated task-in_progress but CSS
+    expected task-in-progress.
+    """
+    repo_id = await _seed_repo()
+    def_id = await _seed_def()
+    pid = await _seed_pipeline(repo_id, def_id)
+    await _seed_task(pid, "Impl auth", status="in_progress", ordering=0)
+
+    resp = await client.get(f"/pipelines/{pid}/tasks")
+    assert resp.status_code == 200
+    assert "task-in-progress" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_tasks_page_not_ready_hyphenated_class(client):
+    """Not-ready status maps to hyphenated CSS class task-not-ready.
+
+    Invariant: status classes use hyphens (CSS convention), not underscores.
+    Context: fixes mismatch where Python generated task-not_ready but CSS
+    expected task-not-ready.
+    """
+    repo_id = await _seed_repo()
+    def_id = await _seed_def()
+    pid = await _seed_pipeline(repo_id, def_id)
+    await _seed_task(pid, "Future task", status="not_ready", ordering=0)
+
+    resp = await client.get(f"/pipelines/{pid}/tasks")
+    assert resp.status_code == 200
+    assert "task-not-ready" in resp.text
+
+
+# ---------------------------------------------------------------------------
+# Unit tests — _build_task_tree decision override
+# ---------------------------------------------------------------------------
+
+from build_your_room.routes.pipelines import _build_task_tree  # noqa: E402
+
+
+def test_build_task_tree_decision_override():
+    """_build_task_tree overrides status_class for decision tasks.
+
+    Invariant: decision-type tasks get task-decision class regardless of status.
+    Context: spec line 958 requires pink=needs human for decision tasks.
+    """
+    tasks = [
+        {"id": 1, "parent_task_id": None, "task_type": "decision",
+         "status": "ready", "preconditions_json": "[]", "postconditions_json": "[]"},
+        {"id": 2, "parent_task_id": None, "task_type": "decision",
+         "status": "blocked", "preconditions_json": "[]", "postconditions_json": "[]"},
+    ]
+    roots = _build_task_tree(tasks)
+    assert roots[0]["status_class"] == "task-decision"
+    assert roots[1]["status_class"] == "task-decision"
+
+
+def test_build_task_tree_decision_completed_not_overridden():
+    """_build_task_tree does not override completed decision tasks.
+
+    Invariant: completed decision tasks get task-completed (green), not pink.
+    Context: once resolved, a decision should look like any completed task.
+    """
+    tasks = [
+        {"id": 1, "parent_task_id": None, "task_type": "decision",
+         "status": "completed", "preconditions_json": "[]", "postconditions_json": "[]"},
+    ]
+    roots = _build_task_tree(tasks)
+    assert roots[0]["status_class"] == "task-completed"
+
+
+def test_build_task_tree_primitive_not_overridden():
+    """_build_task_tree does not apply decision override to primitive tasks.
+
+    Invariant: only decision-type tasks get pink; primitive tasks use status-based coloring.
+    """
+    tasks = [
+        {"id": 1, "parent_task_id": None, "task_type": "primitive",
+         "status": "ready", "preconditions_json": "[]", "postconditions_json": "[]"},
+    ]
+    roots = _build_task_tree(tasks)
+    assert roots[0]["status_class"] == "task-ready"
+
+
+def test_build_task_tree_hyphenated_classes():
+    """_build_task_tree generates hyphenated CSS class names.
+
+    Invariant: status_class uses hyphens (CSS convention), not underscores.
+    Context: ensures Python-generated class names match CSS selectors.
+    """
+    tasks = [
+        {"id": 1, "parent_task_id": None, "task_type": "primitive",
+         "status": "in_progress", "preconditions_json": "[]", "postconditions_json": "[]"},
+        {"id": 2, "parent_task_id": None, "task_type": "primitive",
+         "status": "not_ready", "preconditions_json": "[]", "postconditions_json": "[]"},
+    ]
+    roots = _build_task_tree(tasks)
+    assert roots[0]["status_class"] == "task-in-progress"
+    assert roots[1]["status_class"] == "task-not-ready"
+
+
+# ---------------------------------------------------------------------------
 # Unit tests — _parse_conditions helper
 # ---------------------------------------------------------------------------
 
@@ -736,3 +882,29 @@ def test_parse_conditions_roundtrip(conditions: list[dict[str, str]]):
     for orig, result in zip(conditions, parsed):
         assert result["type"] == orig["type"]
         assert result["description"] == orig["description"]
+
+
+# ---------------------------------------------------------------------------
+# Property-based test — decision task coloring
+# ---------------------------------------------------------------------------
+
+_non_completed_statuses = st.sampled_from([
+    "not_ready", "ready", "in_progress", "blocked", "failed", "skipped",
+])
+
+
+@given(status=_non_completed_statuses)
+@settings(max_examples=20)
+def test_decision_task_always_pink_when_not_completed(status: str):
+    """Decision tasks get task-decision class for any non-completed status.
+
+    Invariant: for any non-completed status, decision-type tasks override
+    the status-based class with task-decision (pink).
+    Context: spec line 958 pink=needs human applies to all active decision states.
+    """
+    tasks = [
+        {"id": 1, "parent_task_id": None, "task_type": "decision",
+         "status": status, "preconditions_json": "[]", "postconditions_json": "[]"},
+    ]
+    roots = _build_task_tree(tasks)
+    assert roots[0]["status_class"] == "task-decision"

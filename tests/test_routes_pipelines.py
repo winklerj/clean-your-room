@@ -682,6 +682,65 @@ async def test_pipeline_detail_htn_decision_task(client):
 
 
 @pytest.mark.asyncio
+async def test_pipeline_detail_htn_decision_task_pink_class(client):
+    """Decision-type tasks get pink 'task-decision' CSS class.
+
+    Invariant: tasks with task_type='decision' and status != 'completed'
+    get the task-decision class for pink border styling per spec line 958.
+    """
+    repo_id = await _seed_repo()
+    def_id = await _seed_pipeline_def()
+    pid = await _seed_pipeline(repo_id, def_id)
+    await _seed_htn_task(
+        pid, name="Decide auth", task_type="decision",
+        status="ready", ordering=0
+    )
+
+    resp = await client.get(f"/pipelines/{pid}")
+    assert resp.status_code == 200
+    assert "task-decision" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_pipeline_detail_htn_decision_completed_no_pink(client):
+    """Completed decision tasks use standard completed class, not pink.
+
+    Invariant: once a decision task is completed, it uses task-completed
+    (green) rather than task-decision (pink).
+    """
+    repo_id = await _seed_repo()
+    def_id = await _seed_pipeline_def()
+    pid = await _seed_pipeline(repo_id, def_id)
+    await _seed_htn_task(
+        pid, name="Decided auth", task_type="decision",
+        status="completed", ordering=0
+    )
+
+    resp = await client.get(f"/pipelines/{pid}")
+    assert resp.status_code == 200
+    assert "task-completed" in resp.text
+    assert "task-decision" not in resp.text
+
+
+@pytest.mark.asyncio
+async def test_pipeline_detail_htn_in_progress_class(client):
+    """In-progress tasks get hyphenated CSS class task-in-progress.
+
+    Invariant: the status_class for in_progress uses hyphens matching CSS.
+    """
+    repo_id = await _seed_repo()
+    def_id = await _seed_pipeline_def()
+    pid = await _seed_pipeline(repo_id, def_id)
+    await _seed_htn_task(
+        pid, name="Impl auth", status="in_progress", ordering=0
+    )
+
+    resp = await client.get(f"/pipelines/{pid}")
+    assert resp.status_code == 200
+    assert "task-in-progress" in resp.text
+
+
+@pytest.mark.asyncio
 async def test_pipeline_detail_htn_no_tasks(client):
     """Pipeline without HTN tasks shows empty state.
 
@@ -1269,7 +1328,8 @@ async def test_htn_task_status_renders_with_class(initialized_db, task_status):
 
         resp = await c.get(f"/pipelines/{pid}")
         assert resp.status_code == 200
-        expected_class = f"task-{task_status}"
+        # Class names use hyphens (CSS convention), not underscores
+        expected_class = f"task-{task_status.replace('_', '-')}"
         assert expected_class in resp.text
 
 
