@@ -37,14 +37,17 @@
 {% if pipelines %}
 <div class="pipelines-header">
     <h2>Pipelines</h2>
-    {% if terminal_count > 0 %}
-    <form method="post" action="/pipelines/cleanup-completed"
-          onsubmit="return confirm('Delete clones for all {{ terminal_count }} completed/cancelled/killed pipelines?')">
-        <button type="submit" class="btn-cleanup-bulk">
-            Clean all completed ({{ terminal_count }})
-        </button>
-    </form>
-    {% endif %}
+    <div class="pipelines-header-actions">
+        <a href="/pipelines/new" class="btn-new-pipeline">New Pipeline</a>
+        {% if terminal_count > 0 %}
+        <form method="post" action="/pipelines/cleanup-completed"
+              onsubmit="return confirm('Delete clones for all {{ terminal_count }} completed/cancelled/killed pipelines?')">
+            <button type="submit" class="btn-cleanup-bulk">
+                Clean all completed ({{ terminal_count }})
+            </button>
+        </form>
+        {% endif %}
+    </div>
 </div>
 <div class="pipeline-cards-grid">
     {% for pipeline in pipelines %}
@@ -52,7 +55,7 @@
     {% endfor %}
 </div>
 {% else %}
-<p class="empty-state">No pipelines yet. Create one from a repo to get started.</p>
+<p class="empty-state">No pipelines yet. <a href="/pipelines/new">Create one</a> to get started.</p>
 {% endif %}
 
 <h2>Repos</h2>

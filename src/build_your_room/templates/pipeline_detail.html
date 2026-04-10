@@ -14,6 +14,46 @@
     {% endif %}
 </div>
 
+{# ---- Lifecycle actions ---- #}
+<div class="pipeline-actions">
+    {% if pipeline.status == 'running' %}
+    <form method="post" action="/pipelines/{{ pipeline.id }}/cancel" class="inline-form"
+          onsubmit="return confirm('Cancel this pipeline?')">
+        <button type="submit" class="btn-action btn-action-cancel">Cancel</button>
+    </form>
+    <form method="post" action="/pipelines/{{ pipeline.id }}/kill" class="inline-form"
+          onsubmit="return confirm('Force kill this pipeline? This terminates sessions immediately.')">
+        <button type="submit" class="btn-action btn-action-kill">Kill</button>
+    </form>
+    <form method="post" action="/pipelines/{{ pipeline.id }}/pause" class="inline-form">
+        <button type="submit" class="btn-action btn-action-pause">Pause</button>
+    </form>
+    {% elif pipeline.status == 'paused' %}
+    <form method="post" action="/pipelines/{{ pipeline.id }}/resume" class="resume-form">
+        <input type="text" name="resolution" placeholder="Resolution notes (optional)" class="resolve-input">
+        <button type="submit" class="btn-action btn-action-resume">Resume</button>
+    </form>
+    <form method="post" action="/pipelines/{{ pipeline.id }}/cancel" class="inline-form"
+          onsubmit="return confirm('Cancel this paused pipeline?')">
+        <button type="submit" class="btn-action btn-action-cancel">Cancel</button>
+    </form>
+    <form method="post" action="/pipelines/{{ pipeline.id }}/kill" class="inline-form"
+          onsubmit="return confirm('Force kill this pipeline?')">
+        <button type="submit" class="btn-action btn-action-kill">Kill</button>
+    </form>
+    {% elif pipeline.status == 'cancel_requested' %}
+    <form method="post" action="/pipelines/{{ pipeline.id }}/kill" class="inline-form"
+          onsubmit="return confirm('Force kill this pipeline?')">
+        <button type="submit" class="btn-action btn-action-kill">Force Kill</button>
+    </form>
+    {% elif pipeline.status == 'pending' %}
+    <form method="post" action="/pipelines/{{ pipeline.id }}/cancel" class="inline-form"
+          onsubmit="return confirm('Cancel this pending pipeline?')">
+        <button type="submit" class="btn-action btn-action-cancel">Cancel</button>
+    </form>
+    {% endif %}
+</div>
+
 {# ---- Lease health + workspace state ---- #}
 <div class="pipeline-health">
     {% if lease_healthy %}

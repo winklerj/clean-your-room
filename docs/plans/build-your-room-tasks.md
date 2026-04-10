@@ -49,3 +49,4 @@ Tracking progress on the build-your-room spec implementation plan.
 ## Phase 6: API + Operational Completeness
 
 - [x] 30. JSON API for programmatic access (routes/api.py) — 10 endpoints, 36 tests (924 total)
+- [x] 31. Pipeline creation form and lifecycle control HTML routes — GET /pipelines/new, POST /pipelines, cancel/kill/pause/resume HTML routes, action buttons in detail page, 28 tests (952 total)

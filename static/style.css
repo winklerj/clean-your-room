@@ -355,3 +355,28 @@ input[type="text"], input[type="url"], input[type="number"] { width: 100%; paddi
 .prompt-create-form { border: 1px solid #ddd; border-radius: 6px; padding: 1rem; background: #fafafa; }
 
 .prompt-edit-form { padding: 0.5rem 0; }
+
+/* New pipeline form */
+.new-pipeline-form { max-width: 500px; }
+.new-pipeline-form label { margin-bottom: 1rem; }
+.new-pipeline-form select { width: 100%; padding: 0.4rem 0.5rem; border: 1px solid #ccc; border-radius: 3px; font-size: 0.95em; }
+.field-label { display: block; font-weight: 600; color: #555; font-size: 0.9em; margin-bottom: 0.25rem; }
+
+/* Pipeline lifecycle action buttons */
+.pipeline-actions { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 1.5rem; flex-wrap: wrap; }
+.inline-form { display: inline; }
+.resume-form { display: flex; gap: 0.35rem; align-items: center; flex: 1; min-width: 200px; }
+.btn-action { padding: 0.35rem 0.85rem; border-radius: 4px; font-size: 0.85em; font-weight: 600; cursor: pointer; border: 1px solid; }
+.btn-action-cancel { background: #fff; color: #d9534f; border-color: #d9534f; }
+.btn-action-cancel:hover { background: #f8d7da; }
+.btn-action-kill { background: #d9534f; color: #fff; border-color: #d9534f; }
+.btn-action-kill:hover { background: #c9302c; }
+.btn-action-pause { background: #fff; color: #856404; border-color: #f0ad4e; }
+.btn-action-pause:hover { background: #fff3cd; }
+.btn-action-resume { background: #27ae60; color: #fff; border-color: #27ae60; }
+.btn-action-resume:hover { background: #219a52; }
+
+/* New pipeline button in dashboard header */
+.pipelines-header-actions { display: flex; gap: 0.75rem; align-items: center; }
+.btn-new-pipeline { display: inline-block; padding: 0.35rem 0.85rem; border: 1px solid #3498db; border-radius: 4px; background: #3498db; color: #fff; font-weight: 600; font-size: 0.85em; text-decoration: none; }
+.btn-new-pipeline:hover { background: #2980b9; border-color: #2980b9; }

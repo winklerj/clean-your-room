@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}New Pipeline - Build Your Room{% endblock %}
+{% block content %}
+<h1>Create Pipeline</h1>
+
+{% if error %}
+<div class="builder-error">{{ error }}</div>
+{% endif %}
+
+<form method="post" action="/pipelines" class="new-pipeline-form">
+    <label>
+        <span class="field-label">Repository</span>
+        {% if repos %}
+        <select name="repo_id" required>
+            <option value="">Select a repo...</option>
+            {% for repo in repos %}
+            <option value="{{ repo['id'] }}">{{ repo.name }} ({{ repo.local_path }})</option>
+            {% endfor %}
+        </select>
+        {% else %}
+        <p class="empty-state">No repos available. <a href="/repos/new">Add one first.</a></p>
+        {% endif %}
+    </label>
+
+    <label>
+        <span class="field-label">Pipeline Definition</span>
+        {% if pipeline_defs %}
+        <select name="pipeline_def_id" required>
+            <option value="">Select a definition...</option>
+            {% for d in pipeline_defs %}
+            <option value="{{ d['id'] }}">{{ d.name }}</option>
+            {% endfor %}
+        </select>
+        {% else %}
+        <p class="empty-state">No pipeline definitions. <a href="/pipeline-defs/new">Create one first.</a></p>
+        {% endif %}
+    </label>
+
+    <div class="builder-actions">
+        <button type="submit" class="btn-create"
+                {% if not repos or not pipeline_defs %}disabled{% endif %}>
+            Create Pipeline
+        </button>
+        <a href="/" class="btn-cancel">Cancel</a>
+    </div>
+</form>
+{% endblock %}

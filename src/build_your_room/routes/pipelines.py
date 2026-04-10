@@ -1,4 +1,4 @@
-"""Pipeline detail route — stage graph, HTN tree, sessions, logs, clone management."""
+"""Pipeline routes — creation form, lifecycle control, detail page, clone management."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from build_your_room.db import get_pool
@@ -27,6 +27,191 @@ _TASK_STATUS_CLASS = {
     "failed": "task-failed",
     "skipped": "task-skipped",
 }
+
+
+# ---------------------------------------------------------------------------
+# Pipeline creation
+# ---------------------------------------------------------------------------
+
+
+@router.get("/pipelines/new", response_class=HTMLResponse)
+async def new_pipeline_form(request: Request, error: str | None = None):
+    """Render the pipeline creation form with repo and def selectors."""
+    from build_your_room.main import templates
+
+    pool = get_pool()
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            "SELECT id, name, local_path FROM repos WHERE archived = 0 ORDER BY name"
+        )
+        repos: list[dict[str, Any]] = await cur.fetchall()  # type: ignore[assignment]
+
+        cur = await conn.execute(
+            "SELECT id, name FROM pipeline_defs ORDER BY name"
+        )
+        defs: list[dict[str, Any]] = await cur.fetchall()  # type: ignore[assignment]
+
+    return templates.TemplateResponse("new_pipeline.html", {
+        "request": request,
+        "repos": repos,
+        "pipeline_defs": defs,
+        "error": error,
+    })
+
+
+@router.post("/pipelines")
+async def create_pipeline(
+    request: Request,
+    pipeline_def_id: int = Form(),
+    repo_id: int = Form(),
+):
+    """Create a new pipeline and start it via the orchestrator. Redirects to detail page."""
+    pool = get_pool()
+    async with pool.connection() as conn:
+        # Validate pipeline_def exists
+        cur = await conn.execute(
+            "SELECT id FROM pipeline_defs WHERE id = %s", (pipeline_def_id,)
+        )
+        if await cur.fetchone() is None:
+            return await new_pipeline_form(request, error="Pipeline definition not found")
+
+        # Validate repo exists and not archived
+        cur = await conn.execute(
+            "SELECT id FROM repos WHERE id = %s AND archived = 0", (repo_id,)
+        )
+        if await cur.fetchone() is None:
+            return await new_pipeline_form(request, error="Repo not found or archived")
+
+        cur = await conn.execute(
+            "INSERT INTO pipelines "
+            "(pipeline_def_id, repo_id, clone_path, review_base_rev, status, config_json) "
+            "VALUES (%s, %s, %s, %s, 'pending', %s) RETURNING id",
+            (pipeline_def_id, repo_id, "", "", "{}"),
+        )
+        row: dict[str, Any] | None = await cur.fetchone()  # type: ignore[assignment]
+        assert row is not None
+        await conn.commit()
+
+    pipeline_id = row["id"]
+
+    from build_your_room.main import orchestrator
+
+    if orchestrator is not None:
+        await orchestrator.start_pipeline(pipeline_id)
+
+    return RedirectResponse(url=f"/pipelines/{pipeline_id}", status_code=303)
+
+
+# ---------------------------------------------------------------------------
+# Pipeline lifecycle control
+# ---------------------------------------------------------------------------
+
+
+@router.post("/pipelines/{pipeline_id}/cancel")
+async def cancel_pipeline_html(pipeline_id: int):
+    """Graceful cancel — signals the cancel event, redirects to detail page."""
+    pool = get_pool()
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            "SELECT id, status FROM pipelines WHERE id = %s", (pipeline_id,)
+        )
+        row: dict[str, Any] | None = await cur.fetchone()  # type: ignore[assignment]
+        if row is None:
+            return HTMLResponse("<h1>Pipeline not found</h1>", status_code=404)
+
+    if row["status"] in ("running", "paused"):
+        from build_your_room.main import orchestrator
+
+        if orchestrator is not None:
+            await orchestrator.cancel_pipeline(pipeline_id)
+        else:
+            async with pool.connection() as conn:
+                await conn.execute(
+                    "UPDATE pipelines SET status = 'cancel_requested', updated_at = now() "
+                    "WHERE id = %s AND status IN ('running', 'paused')",
+                    (pipeline_id,),
+                )
+                await conn.commit()
+
+    return RedirectResponse(url=f"/pipelines/{pipeline_id}", status_code=303)
+
+
+@router.post("/pipelines/{pipeline_id}/kill")
+async def kill_pipeline_html(pipeline_id: int):
+    """Force kill — terminates live sessions immediately, redirects to detail page."""
+    pool = get_pool()
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            "SELECT id, status FROM pipelines WHERE id = %s", (pipeline_id,)
+        )
+        row: dict[str, Any] | None = await cur.fetchone()  # type: ignore[assignment]
+        if row is None:
+            return HTMLResponse("<h1>Pipeline not found</h1>", status_code=404)
+
+    if row["status"] not in _TERMINAL_STATUSES:
+        from build_your_room.main import orchestrator
+
+        if orchestrator is not None:
+            await orchestrator.kill_pipeline(pipeline_id)
+        else:
+            async with pool.connection() as conn:
+                placeholders = ",".join(["%s"] * len(_TERMINAL_STATUSES))
+                await conn.execute(
+                    "UPDATE pipelines SET status = 'killed', updated_at = now() "
+                    f"WHERE id = %s AND status NOT IN ({placeholders})",
+                    (pipeline_id, *_TERMINAL_STATUSES),
+                )
+                await conn.commit()
+
+    return RedirectResponse(url=f"/pipelines/{pipeline_id}", status_code=303)
+
+
+@router.post("/pipelines/{pipeline_id}/pause")
+async def pause_pipeline_html(pipeline_id: int):
+    """Pause a running pipeline, redirects to detail page."""
+    pool = get_pool()
+    async with pool.connection() as conn:
+        await conn.execute(
+            "UPDATE pipelines SET status = 'paused', updated_at = now() "
+            "WHERE id = %s AND status = 'running'",
+            (pipeline_id,),
+        )
+        await conn.commit()
+
+    return RedirectResponse(url=f"/pipelines/{pipeline_id}", status_code=303)
+
+
+@router.post("/pipelines/{pipeline_id}/resume")
+async def resume_pipeline_html(
+    pipeline_id: int,
+    resolution: str = Form(""),
+):
+    """Resume a paused pipeline after escalation resolution."""
+    from build_your_room.main import orchestrator
+
+    if orchestrator is not None:
+        await orchestrator.resume_pipeline(pipeline_id, resolution or "Resumed from dashboard")
+    else:
+        pool = get_pool()
+        async with pool.connection() as conn:
+            await conn.execute(
+                "UPDATE escalations SET status = 'resolved', resolution = %s, "
+                "resolved_at = now() WHERE pipeline_id = %s AND status = 'open'",
+                (resolution or "Resumed from dashboard", pipeline_id),
+            )
+            await conn.execute(
+                "UPDATE pipelines SET status = 'pending', updated_at = now() "
+                "WHERE id = %s AND status = 'paused'",
+                (pipeline_id,),
+            )
+            await conn.commit()
+
+    return RedirectResponse(url=f"/pipelines/{pipeline_id}", status_code=303)
+
+
+# ---------------------------------------------------------------------------
+# Detail page helpers
+# ---------------------------------------------------------------------------
 
 
 def _build_task_tree(
