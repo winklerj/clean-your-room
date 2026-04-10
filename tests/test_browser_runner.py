@@ -63,6 +63,11 @@ def _make_mock_bridge_process(
     proc.returncode = None
     proc.pid = 12345
 
+    # terminate() and kill() are synchronous on asyncio.subprocess.Process —
+    # using AsyncMock would produce unawaited-coroutine RuntimeWarnings.
+    proc.terminate = MagicMock()
+    proc.kill = MagicMock()
+
     proc.stdin = AsyncMock()
     proc.stdin.write = MagicMock()
     proc.stdin.drain = AsyncMock()
@@ -703,6 +708,8 @@ class TestCleanup:
 
         mock_proc = AsyncMock()
         mock_proc.pid = 999
+        mock_proc.terminate = MagicMock()
+        mock_proc.kill = MagicMock()
         mock_proc.wait = AsyncMock(return_value=0)
         runner._dev_server = DevServerHandle(
             process=mock_proc,

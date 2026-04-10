@@ -32,6 +32,12 @@ build-backend = "hatchling.build"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+filterwarnings = [
+    # Subprocess transports from pytest-postgresql can be GC'd after the event
+    # loop closes, producing spurious RuntimeError warnings.  This is a known
+    # pytest-asyncio/subprocess interaction issue, not a defect in our code.
+    "ignore:.*BaseSubprocessTransport.*:pytest.PytestUnraisableExceptionWarning",
+]
 
 [tool.ruff]
 target-version = "py312"
