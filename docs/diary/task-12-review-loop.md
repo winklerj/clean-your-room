@@ -1,5 +1,5 @@
 # Task 12: Review Loop Logic
-## Session | Complexity: medium | Tests: 40 new (428 total)
+## Session | Complexity: medium | Tests: 48 new (436 total)
 
 ### What I did
 - Created `src/build_your_room/stages/` package with `__init__.py` and `review_loop.py`
@@ -18,6 +18,8 @@
 - The `_feed_back()` helper gracefully falls back to same-session if no `primary_adapter` is provided — this handles the case where rotation can't happen (e.g., adapter not configured or after server restart where same-session is not resumable anyway).
 - The `ContextMonitor.parse_claude_usage()` returns `None` when max_tokens is 0, so the `_feed_back` codepath correctly handles this by skipping the context check entirely and defaulting to same-session continuation.
 - Review sessions are ephemeral (one per round) while the primary session persists across rounds. This asymmetry is by design — the reviewer gets a clean context each round, while the primary accumulates context from successive revisions.
+- Property-based tests caught a key invariant: `should_always_feed_back(r)` and `should_approve(r)` are always disjoint — no input can satisfy both. This is a consequence of the severity ordering but is non-obvious and worth verifying generatively.
+- The `@st.composite` strategy `valid_structured_approvals` generates well-formed review output dicts with all required fields, making it easy to fuzz the decision gate logic across the full input space.
 
 ### Architecture decisions
 - `review_loop.py` lives in `stages/` rather than `adapters/` — it orchestrates two adapters, so it belongs at the stage layer
@@ -27,4 +29,4 @@
 ### Postcondition verification
 - [PASS] ruff check: All checks passed
 - [PASS] mypy: Success, no issues found
-- [PASS] pytest: 428 tests passed (40 new)
+- [PASS] pytest: 436 tests passed (48 new: 40 unit + 8 property-based)

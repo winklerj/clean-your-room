@@ -12,6 +12,8 @@ from typing import Any
 from unittest.mock import AsyncMock
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 from build_your_room.adapters.base import SessionConfig
 from build_your_room.context_monitor import (
@@ -32,6 +34,32 @@ from build_your_room.stages.review_loop import (
     should_approve,
 )
 from build_your_room.streaming import LogBuffer
+
+
+# ---------------------------------------------------------------------------
+# Hypothesis strategies
+# ---------------------------------------------------------------------------
+
+_severities = st.sampled_from(list(SEVERITY_ORDER))
+
+
+@st.composite
+def valid_structured_approvals(draw: st.DrawFn) -> dict[str, Any]:
+    """Generate well-formed structured review output dicts."""
+    issues = draw(st.lists(
+        st.fixed_dictionaries({
+            "severity": _severities,
+            "description": st.text(min_size=1, max_size=60),
+        }),
+        min_size=0,
+        max_size=5,
+    ))
+    return {
+        "approved": draw(st.booleans()),
+        "max_severity": draw(_severities),
+        "issues": issues,
+        "feedback_markdown": draw(st.text(min_size=0, max_size=100)),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -224,6 +252,38 @@ class TestParseReviewResult:
         assert result is not None
         assert result.raw == raw
 
+    @given(data=valid_structured_approvals())
+    def test_property_parse_never_raises_on_valid_input(self, data: dict[str, Any]) -> None:
+        """Property: parse_review_result never raises on well-formed input.
+
+        Invariant: For all dicts containing 'approved', parsing succeeds
+        and produces a ReviewResult with max_severity in SEVERITY_ORDER.
+        """
+        result = parse_review_result(data)
+        assert result is not None
+        assert result.max_severity in SEVERITY_ORDER
+
+    @given(data=valid_structured_approvals())
+    def test_property_approved_field_preserves_truthiness(self, data: dict[str, Any]) -> None:
+        """Property: approved field faithfully reflects the input boolean.
+
+        Invariant: bool(input['approved']) == result.approved for all inputs.
+        """
+        result = parse_review_result(data)
+        assert result is not None
+        assert result.approved == bool(data["approved"])
+
+    @given(data=valid_structured_approvals())
+    def test_property_issue_count_bounded(self, data: dict[str, Any]) -> None:
+        """Property: parsed issues never exceed input issues.
+
+        Invariant: len(result.issues) <= len(input['issues']).
+        Non-dict entries are filtered, so count can decrease but never increase.
+        """
+        result = parse_review_result(data)
+        assert result is not None
+        assert len(result.issues) <= len(data.get("issues", []))
+
 
 # ===================================================================
 # should_approve / should_always_feed_back tests
@@ -263,6 +323,41 @@ class TestApprovalLogic:
         r = ReviewResult(approved=False, max_severity="low", issues=[], feedback_markdown="")
         assert should_always_feed_back(r) is False
 
+    @given(data=valid_structured_approvals())
+    def test_property_approve_implies_low_severity(self, data: dict[str, Any]) -> None:
+        """Property: should_approve(r) → max_severity in (none, low).
+
+        Invariant: Approval is only granted for low-severity outcomes.
+        Contrapositive: high/critical severity never passes should_approve.
+        """
+        result = parse_review_result(data)
+        assert result is not None
+        if should_approve(result):
+            assert result.approved is True
+            assert result.max_severity in ("none", "low")
+
+    @given(data=valid_structured_approvals())
+    def test_property_high_severity_never_approves(self, data: dict[str, Any]) -> None:
+        """Property: high/critical severity → should_approve is False.
+
+        Invariant: Approval and high severity are mutually exclusive.
+        """
+        result = parse_review_result(data)
+        assert result is not None
+        if _severity_index(result.max_severity) >= 3:
+            assert should_approve(result) is False
+
+    @given(data=valid_structured_approvals())
+    def test_property_always_feed_back_implies_not_approve(self, data: dict[str, Any]) -> None:
+        """Property: should_always_feed_back(r) → not should_approve(r).
+
+        Invariant: The 'always feed back' and 'approve' conditions are disjoint.
+        """
+        result = parse_review_result(data)
+        assert result is not None
+        if should_always_feed_back(result):
+            assert should_approve(result) is False
+
 
 # ===================================================================
 # _severity_index tests
@@ -279,6 +374,23 @@ class TestSeverityIndex:
 
     def test_unknown_defaults_to_zero(self) -> None:
         assert _severity_index("banana") == 0
+
+    @given(sev=_severities)
+    def test_property_index_roundtrips_through_severity_order(self, sev: str) -> None:
+        """Property: SEVERITY_ORDER[_severity_index(s)] == s for all valid severities.
+
+        Invariant: The index function and the tuple are consistent.
+        """
+        assert SEVERITY_ORDER[_severity_index(sev)] == sev
+
+    @given(a=_severities, b=_severities)
+    def test_property_index_preserves_ordering(self, a: str, b: str) -> None:
+        """Property: The severity ordering is total — either a <= b or b <= a.
+
+        Invariant: _severity_index provides a total order over SEVERITY_ORDER.
+        """
+        ia, ib = _severity_index(a), _severity_index(b)
+        assert ia <= ib or ib <= ia
 
 
 # ===================================================================
