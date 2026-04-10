@@ -24,7 +24,7 @@ Tracking progress on the build-your-room spec implementation plan.
 ## Phase 3: Stage runners
 
 - [x] 14. SpecAuthorStage + review loop integration
-- [ ] 15. ImplPlanStage + review loop integration + HTN task graph population from structured output
+- [x] 15. ImplPlanStage + review loop integration + HTN task graph population from structured output
 - [ ] 16. ImplTaskStage with atomic HTN task claims, same-task context rotation, and postcondition verification
 - [ ] 17. CodeReviewStage with full-head diff review and bug-fix loop
 - [ ] 18. ValidationStage with typed browser tools and harness-owned dev-browser integration
