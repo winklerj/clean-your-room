@@ -12,7 +12,7 @@ Tracking progress on the build-your-room spec implementation plan.
 - [x] 6. Command-template registry for repo-standard `uv run` verification commands
 - [x] 7. ContextMonitor as a reusable hook
 - [x] 8. Config module with all env vars
-- [ ] 9. HTNPlanner: task graph CRUD, atomic claims, readiness propagation, postcondition verification
+- [x] 9. HTNPlanner: task graph CRUD, atomic claims, readiness propagation, postcondition verification
 
 ## Phase 2: Agent adapters
 
