@@ -1,23 +1,36 @@
 <tr id="prompt-{{ prompt['id'] }}">
-    <td colspan="5">
-        <form hx-put="/prompts/{{ prompt['id'] }}" hx-target="#prompt-{{ prompt['id'] }}" hx-swap="outerHTML">
-            <label>Name <input type="text" name="name" value="{{ prompt['name'] }}" required></label>
-            <label>Stage Type
-                <select name="stage_type">
-                    {% for st in ['spec_author', 'spec_review', 'impl_plan', 'impl_plan_review', 'impl_task', 'code_review', 'bug_fix', 'validation', 'custom'] %}
-                    <option value="{{ st }}" {% if prompt['stage_type'] == st %}selected{% endif %}>{{ st }}</option>
-                    {% endfor %}
-                </select>
-            </label>
-            <label>Agent Type
-                <select name="agent_type">
-                    <option value="claude" {% if prompt['agent_type'] == 'claude' %}selected{% endif %}>Claude</option>
-                    <option value="codex" {% if prompt['agent_type'] == 'codex' %}selected{% endif %}>Codex</option>
-                </select>
-            </label>
-            <label>Body <textarea name="body" rows="10" required>{{ prompt['body'] }}</textarea></label>
-            <button type="submit">Save</button>
-            <button hx-get="/prompts/{{ prompt['id'] }}/row" hx-target="#prompt-{{ prompt['id'] }}" hx-swap="outerHTML">Cancel</button>
+    <td colspan="6">
+        <form class="prompt-edit-form" hx-put="/prompts/{{ prompt['id'] }}" hx-target="#prompt-{{ prompt['id'] }}" hx-swap="outerHTML">
+            <div class="builder-row">
+                <div class="builder-field builder-field-sm">
+                    <label>Name</label>
+                    <input type="text" name="name" value="{{ prompt['name'] }}" required>
+                </div>
+                <div class="builder-field builder-field-sm">
+                    <label>Stage Type</label>
+                    <select name="stage_type">
+                        {% for st in stage_types %}
+                        <option value="{{ st }}" {% if prompt['stage_type'] == st %}selected{% endif %}>{{ st | replace('_', ' ') | title }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="builder-field builder-field-sm">
+                    <label>Agent Type</label>
+                    <select name="agent_type">
+                        {% for at in agent_types %}
+                        <option value="{{ at }}" {% if prompt['agent_type'] == at %}selected{% endif %}>{{ at | capitalize }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+            <div class="builder-field">
+                <label>Body</label>
+                <textarea name="body" rows="10" required>{{ prompt['body'] }}</textarea>
+            </div>
+            <div class="builder-actions">
+                <button type="submit" class="btn-create">Save</button>
+                <a hx-get="/prompts/{{ prompt['id'] }}/row" hx-target="#prompt-{{ prompt['id'] }}" hx-swap="outerHTML" class="btn-cancel">Cancel</a>
+            </div>
         </form>
     </td>
 </tr>

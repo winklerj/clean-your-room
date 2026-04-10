@@ -2,9 +2,55 @@
 {% block title %}Prompts - Build Your Room{% endblock %}
 {% block content %}
 <h1>Prompts</h1>
-<table id="prompts-table">
+
+{% if error %}
+<div class="prompt-page-error">{{ error }}</div>
+{% endif %}
+
+<div class="prompt-stats">
+    <div class="stat-card stat-card-total">
+        <div class="stat-number">{{ total }}</div>
+        <div class="stat-label">Total</div>
+    </div>
+    {% for agent in agent_types %}
+    {% if agent in by_agent %}
+    <div class="stat-card {% if agent == 'claude' %}stat-card-running{% else %}stat-card-attention{% endif %}">
+        <div class="stat-number">{{ by_agent[agent] }}</div>
+        <div class="stat-label">{{ agent | capitalize }}</div>
+    </div>
+    {% endif %}
+    {% endfor %}
+</div>
+
+<div class="prompt-filters">
+    <span class="filter-label">Filter:</span>
+    <select id="filter-stage" onchange="applyFilters()">
+        <option value="">All stages</option>
+        {% for st in stage_types %}
+        <option value="{{ st }}" {% if filter_stage_type == st %}selected{% endif %}>{{ st | replace('_', ' ') | title }}</option>
+        {% endfor %}
+    </select>
+    <select id="filter-agent" onchange="applyFilters()">
+        <option value="">All agents</option>
+        {% for at in agent_types %}
+        <option value="{{ at }}" {% if filter_agent_type == at %}selected{% endif %}>{{ at | capitalize }}</option>
+        {% endfor %}
+    </select>
+    {% if filter_stage_type or filter_agent_type %}
+    <a href="/prompts" class="filter-clear">Clear filters</a>
+    {% endif %}
+</div>
+
+<table id="prompts-table" class="prompt-table">
     <thead>
-        <tr><th>Name</th><th>Stage</th><th>Agent</th><th>Preview</th><th>Actions</th></tr>
+        <tr>
+            <th>Name</th>
+            <th>Stage</th>
+            <th>Agent</th>
+            <th>Body</th>
+            <th>Usage</th>
+            <th>Actions</th>
+        </tr>
     </thead>
     <tbody id="prompt-list">
         {% for prompt in prompts %}
@@ -12,29 +58,55 @@
         {% endfor %}
     </tbody>
 </table>
+
+{% if not prompts %}
+<p class="empty-state">No prompts found{% if filter_stage_type or filter_agent_type %} matching filters{% endif %}.</p>
+{% endif %}
+
 <h2>New Prompt</h2>
-<form hx-post="/prompts" hx-target="#prompt-list" hx-swap="beforeend" hx-on::after-request="if(event.detail.successful) this.reset()">
-    <label>Name <input type="text" name="name" required></label>
-    <label>Stage Type
-        <select name="stage_type">
-            <option value="spec_author">Spec Author</option>
-            <option value="spec_review">Spec Review</option>
-            <option value="impl_plan">Impl Plan</option>
-            <option value="impl_plan_review">Impl Plan Review</option>
-            <option value="impl_task">Impl Task</option>
-            <option value="code_review">Code Review</option>
-            <option value="bug_fix">Bug Fix</option>
-            <option value="validation">Validation</option>
-            <option value="custom" selected>Custom</option>
-        </select>
-    </label>
-    <label>Agent Type
-        <select name="agent_type">
-            <option value="claude" selected>Claude</option>
-            <option value="codex">Codex</option>
-        </select>
-    </label>
-    <label>Body <textarea name="body" rows="10" required></textarea></label>
-    <button type="submit">Create</button>
-</form>
+<div class="prompt-create-form">
+    <form hx-post="/prompts" hx-target="#prompt-list" hx-swap="beforeend" hx-on::after-request="if(event.detail.successful) this.reset()">
+        <div class="builder-row">
+            <div class="builder-field builder-field-sm">
+                <label>Name</label>
+                <input type="text" name="name" required placeholder="my_prompt_name">
+            </div>
+            <div class="builder-field builder-field-sm">
+                <label>Stage Type</label>
+                <select name="stage_type">
+                    {% for st in stage_types %}
+                    <option value="{{ st }}" {% if st == 'custom' %}selected{% endif %}>{{ st | replace('_', ' ') | title }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="builder-field builder-field-sm">
+                <label>Agent Type</label>
+                <select name="agent_type">
+                    {% for at in agent_types %}
+                    <option value="{{ at }}">{{ at | capitalize }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+        <div class="builder-field">
+            <label>Body <span class="prompt-hint">Supports &#123;&#123;variable&#125;&#125; template syntax</span></label>
+            <textarea name="body" rows="8" required placeholder="Enter prompt template..."></textarea>
+        </div>
+        <div class="builder-actions">
+            <button type="submit" class="btn-create">Create Prompt</button>
+        </div>
+    </form>
+</div>
+
+<script>
+function applyFilters() {
+    var stage = document.getElementById('filter-stage').value;
+    var agent = document.getElementById('filter-agent').value;
+    var params = new URLSearchParams();
+    if (stage) params.set('stage_type', stage);
+    if (agent) params.set('agent_type', agent);
+    var qs = params.toString();
+    window.location.href = '/prompts' + (qs ? '?' + qs : '');
+}
+</script>
 {% endblock %}

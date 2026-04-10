@@ -314,3 +314,39 @@ input[type="text"], input[type="url"], input[type="number"] { width: 100%; paddi
 .btn-create:hover { background: #2980b9; }
 .btn-cancel { padding: 0.5rem 1rem; border: 1px solid #ccc; border-radius: 4px; background: #fff; color: #666; text-decoration: none; font-size: 0.9em; }
 .btn-cancel:hover { background: #f5f5f5; }
+
+/* Prompt management */
+.prompt-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+
+.prompt-filters { display: flex; gap: 0.75rem; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; }
+.filter-label { font-weight: 600; color: #555; font-size: 0.9em; }
+.prompt-filters select { padding: 0.3rem 0.5rem; border: 1px solid #ccc; border-radius: 3px; font-size: 0.9em; }
+.filter-clear { font-size: 0.85em; color: #d9534f; text-decoration: none; }
+.filter-clear:hover { text-decoration: underline; }
+
+.prompt-table th { font-size: 0.85em; color: #555; text-transform: uppercase; letter-spacing: 0.03em; }
+
+.prompt-name { font-weight: 700; }
+.prompt-variables { margin-top: 0.25rem; display: flex; gap: 0.25rem; flex-wrap: wrap; }
+.variable-badge { display: inline-block; font-size: 0.7em; padding: 0.1rem 0.4rem; border-radius: 3px; background: #e8daef; color: #6c3483; font-family: monospace; }
+
+.prompt-body-expand summary { cursor: pointer; list-style: none; }
+.prompt-body-expand summary::-webkit-details-marker { display: none; }
+.prompt-body-expand summary code { font-size: 0.8em; color: #555; }
+.prompt-body-full { background: #f6f8fa; border: 1px solid #e1e4e8; border-radius: 4px; padding: 0.5rem; font-size: 0.8em; white-space: pre-wrap; word-wrap: break-word; max-height: 300px; overflow-y: auto; margin-top: 0.3rem; }
+
+.prompt-usage-count { font-size: 0.85em; font-weight: 600; color: #3498db; cursor: help; }
+.prompt-usage-none { font-size: 0.85em; color: #999; font-style: italic; }
+
+.prompt-actions { white-space: nowrap; }
+.prompt-actions button { font-size: 0.8em; padding: 0.2rem 0.5rem; border: 1px solid #ccc; border-radius: 3px; background: #fff; margin-right: 0.25rem; }
+.prompt-actions button:hover { background: #f5f5f5; border-color: #999; }
+
+.prompt-page-error { background: #f8d7da; border: 1px solid #f5c6cb; border-radius: 6px; padding: 0.75rem 1rem; margin-bottom: 1.5rem; color: #721c24; font-weight: 600; }
+.prompt-error { background: #f8d7da; border: 1px solid #f5c6cb; border-radius: 4px; padding: 0.5rem 0.75rem; color: #721c24; font-size: 0.9em; margin: 0.25rem 0; }
+
+.prompt-hint { font-weight: 400; color: #888; font-size: 0.85em; margin-left: 0.5rem; }
+
+.prompt-create-form { border: 1px solid #ddd; border-radius: 6px; padding: 1rem; background: #fafafa; }
+
+.prompt-edit-form { padding: 0.5rem 0; }

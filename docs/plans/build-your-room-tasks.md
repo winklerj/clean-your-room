@@ -35,7 +35,7 @@ Tracking progress on the build-your-room spec implementation plan.
 - [x] 20. Escalation queue page
 - [x] 21. Pipeline detail page with stage-graph viz, HTN task tree, lease health, dirty-snapshot visibility, and live logs
 - [x] 22. Pipeline builder form with explicit node/edge editing
-- [ ] 23. Prompt management (extend existing)
+- [x] 23. Prompt management (extend existing)
 - [ ] 24. Clone cleanup buttons (per-pipeline and bulk)
 
 ## Phase 5: Polish + validation

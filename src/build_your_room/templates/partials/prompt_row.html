@@ -1,10 +1,32 @@
 <tr id="prompt-{{ prompt['id'] }}">
-    <td>{{ prompt['name'] }}</td>
-    <td>{{ prompt['stage_type'] }}</td>
-    <td>{{ prompt['agent_type'] }}</td>
-    <td><code>{{ prompt['body'][:80] }}{% if prompt['body']|length > 80 %}...{% endif %}</code></td>
     <td>
+        <span class="prompt-name">{{ prompt['name'] }}</span>
+        {% if prompt.get('variables') %}
+        <div class="prompt-variables">
+            {% for var in prompt['variables'] %}
+            <span class="variable-badge">{{ var }}</span>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </td>
+    <td><span class="reason-badge">{{ prompt['stage_type'] | replace('_', ' ') }}</span></td>
+    <td><span class="status-badge {% if prompt['agent_type'] == 'claude' %}status-running{% else %}status-needs_attention{% endif %}">{{ prompt['agent_type'] }}</span></td>
+    <td>
+        <details class="prompt-body-expand">
+            <summary><code>{{ prompt['body'][:80] }}{% if prompt['body']|length > 80 %}...{% endif %}</code></summary>
+            <pre class="prompt-body-full">{{ prompt['body'] }}</pre>
+        </details>
+    </td>
+    <td>
+        {% if prompt.get('used_by') %}
+        <span class="prompt-usage-count" title="{{ prompt['used_by'] | join(', ') }}">{{ prompt['used_by'] | length }} def{{ 's' if prompt['used_by'] | length != 1 }}</span>
+        {% else %}
+        <span class="prompt-usage-none">unused</span>
+        {% endif %}
+    </td>
+    <td class="prompt-actions">
         <button hx-get="/prompts/{{ prompt['id'] }}/edit" hx-target="#prompt-{{ prompt['id'] }}" hx-swap="outerHTML">Edit</button>
-        <button hx-delete="/prompts/{{ prompt['id'] }}" hx-target="#prompt-{{ prompt['id'] }}" hx-swap="outerHTML">Delete</button>
+        <button hx-post="/prompts/{{ prompt['id'] }}/clone" hx-target="#prompt-list" hx-swap="beforeend">Clone</button>
+        <button hx-delete="/prompts/{{ prompt['id'] }}" hx-target="#prompt-{{ prompt['id'] }}" hx-swap="outerHTML" hx-confirm="Delete prompt '{{ prompt['name'] }}'?">Delete</button>
     </td>
 </tr>
