@@ -52,6 +52,48 @@ wheels = [
 ]
 
 [[package]]
+name = "build-your-room"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "aiosqlite" },
+    { name = "claude-agent-sdk" },
+    { name = "fastapi" },
+    { name = "jinja2" },
+    { name = "python-dotenv" },
+    { name = "sse-starlette" },
+    { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "httpx" },
+    { name = "hypothesis" },
+    { name = "mypy" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "ruff" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aiosqlite", specifier = ">=0.20" },
+    { name = "claude-agent-sdk", specifier = ">=0.1" },
+    { name = "fastapi", specifier = ">=0.115" },
+    { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27" },
+    { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6.100" },
+    { name = "jinja2", specifier = ">=3.1" },
+    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.24" },
+    { name = "python-dotenv", specifier = ">=1.0" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.4" },
+    { name = "sse-starlette", specifier = ">=2.0" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.34" },
+]
+provides-extras = ["dev"]
+
+[[package]]
 name = "certifi"
 version = "2026.2.25"
 source = { registry = "https://pypi.org/simple" }
@@ -132,48 +174,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/a1/8b/d91975df575f196fe62d2abf4161696f34c20703435eedee5e54d022b503/claude_agent_sdk-0.1.47-py3-none-manylinux_2_17_x86_64.whl", hash = "sha256:d2dc2c0b5b4a2266a69ace5ada21fcf90e3f284a1e0968f94218d041cfc72ea9", size = 76109307, upload-time = "2026-03-06T01:29:35.119Z" },
     { url = "https://files.pythonhosted.org/packages/43/c6/9300d5f5f834145028b5fa8d372c226a8b590b56a488ab417a9cbece19cd/claude_agent_sdk-0.1.47-py3-none-win_amd64.whl", hash = "sha256:75a85c9e566cb89e7ecd17b430246f47f225f91a52a7f44cfdb301231d5eba4e", size = 77287865, upload-time = "2026-03-06T01:29:39.402Z" },
 ]
-
-[[package]]
-name = "clean-room"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "aiosqlite" },
-    { name = "claude-agent-sdk" },
-    { name = "fastapi" },
-    { name = "jinja2" },
-    { name = "python-dotenv" },
-    { name = "sse-starlette" },
-    { name = "uvicorn", extra = ["standard"] },
-]
-
-[package.optional-dependencies]
-dev = [
-    { name = "httpx" },
-    { name = "hypothesis" },
-    { name = "mypy" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "ruff" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "aiosqlite", specifier = ">=0.20" },
-    { name = "claude-agent-sdk", specifier = ">=0.1" },
-    { name = "fastapi", specifier = ">=0.115" },
-    { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27" },
-    { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6.100" },
-    { name = "jinja2", specifier = ">=3.1" },
-    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.24" },
-    { name = "python-dotenv", specifier = ">=1.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.4" },
-    { name = "sse-starlette", specifier = ">=2.0" },
-    { name = "uvicorn", extras = ["standard"], specifier = ">=0.34" },
-]
-provides-extras = ["dev"]
 
 [[package]]
 name = "click"

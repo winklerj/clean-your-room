@@ -1,8 +1,0 @@
-<tr id="prompt-{{ prompt.id }}">
-    <td>{{ prompt.name }}</td>
-    <td><code>{{ prompt.template[:100] }}{% if prompt.template|length > 100 %}...{% endif %}</code></td>
-    <td>
-        <button hx-get="/prompts/{{ prompt.id }}/edit" hx-target="#prompt-{{ prompt.id }}" hx-swap="outerHTML">Edit</button>
-        <button hx-delete="/prompts/{{ prompt.id }}" hx-target="#prompt-{{ prompt.id }}" hx-swap="outerHTML">Delete</button>
-    </td>
-</tr>

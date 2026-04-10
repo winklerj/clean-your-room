@@ -2,6 +2,6 @@ import pytest
 
 
 @pytest.fixture
-def tmp_clean_room(tmp_path):
-    """Provide an isolated clean room directory for tests."""
-    return tmp_path / "clean-room"
+def tmp_build_room(tmp_path):
+    """Provide an isolated build-your-room directory for tests."""
+    return tmp_path / "build-your-room"

@@ -1,7 +1,7 @@
 import pytest
 import asyncio
 
-from clean_room.streaming import LogBuffer
+from build_your_room.streaming import LogBuffer
 
 
 @pytest.mark.asyncio
@@ -17,7 +17,7 @@ async def test_append_and_read():
 async def test_subscribe_receives_new_messages():
     """Subscriber receives messages appended after subscription."""
     buf = LogBuffer()
-    received = []
+    received: list[str] = []
 
     async def reader():
         async for msg in buf.subscribe(1):
@@ -35,9 +35,9 @@ async def test_subscribe_receives_new_messages():
 
 @pytest.mark.asyncio
 async def test_close_terminates_subscribers():
-    """Closing a job's buffer terminates all active subscribers."""
+    """Closing a buffer terminates all active subscribers."""
     buf = LogBuffer()
-    received = []
+    received: list[str] = []
 
     async def reader():
         async for msg in buf.subscribe(1):
@@ -52,10 +52,10 @@ async def test_close_terminates_subscribers():
 
 
 @pytest.mark.asyncio
-async def test_multiple_jobs_isolated():
-    """Messages for different jobs don't leak across subscribers."""
+async def test_multiple_channels_isolated():
+    """Messages for different channels don't leak across subscribers."""
     buf = LogBuffer()
-    buf.append(1, "job1")
-    buf.append(2, "job2")
-    assert buf.get_history(1) == ["job1"]
-    assert buf.get_history(2) == ["job2"]
+    buf.append(1, "chan1")
+    buf.append(2, "chan2")
+    assert buf.get_history(1) == ["chan1"]
+    assert buf.get_history(2) == ["chan2"]

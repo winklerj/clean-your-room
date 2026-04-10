@@ -1,15 +1,16 @@
 from fastapi import APIRouter, Request, Form
 from fastapi.responses import HTMLResponse
 
-from clean_room.config import DB_PATH
-from clean_room.db import get_db
+from build_your_room.config import DB_PATH
+from build_your_room.db import get_db
 
 router = APIRouter(prefix="/prompts")
 
 
 @router.get("", response_class=HTMLResponse)
 async def list_prompts(request: Request):
-    from clean_room.main import templates
+    from build_your_room.main import templates
+
     db = await get_db(DB_PATH)
     try:
         cursor = await db.execute("SELECT * FROM prompts ORDER BY id")
@@ -22,13 +23,21 @@ async def list_prompts(request: Request):
 
 
 @router.post("", response_class=HTMLResponse)
-async def create_prompt(request: Request, name: str = Form(), template: str = Form()):
-    from clean_room.main import templates
+async def create_prompt(
+    request: Request,
+    name: str = Form(),
+    body: str = Form(),
+    stage_type: str = Form("custom"),
+    agent_type: str = Form("claude"),
+):
+    from build_your_room.main import templates
+
     db = await get_db(DB_PATH)
     try:
         cursor = await db.execute(
-            "INSERT INTO prompts (name, template) VALUES (?, ?) RETURNING *",
-            (name, template),
+            "INSERT INTO prompts (name, body, stage_type, agent_type) "
+            "VALUES (?, ?, ?, ?) RETURNING *",
+            (name, body, stage_type, agent_type),
         )
         prompt = await cursor.fetchone()
         await db.commit()
@@ -41,15 +50,21 @@ async def create_prompt(request: Request, name: str = Form(), template: str = Fo
 
 @router.put("/{prompt_id}", response_class=HTMLResponse)
 async def update_prompt(
-    request: Request, prompt_id: int, name: str = Form(), template: str = Form(),
+    request: Request,
+    prompt_id: int,
+    name: str = Form(),
+    body: str = Form(),
+    stage_type: str = Form("custom"),
+    agent_type: str = Form("claude"),
 ):
-    from clean_room.main import templates
+    from build_your_room.main import templates
+
     db = await get_db(DB_PATH)
     try:
         cursor = await db.execute(
-            "UPDATE prompts SET name=?, template=?, updated_at=datetime('now') "
-            "WHERE id=? RETURNING *",
-            (name, template, prompt_id),
+            "UPDATE prompts SET name=?, body=?, stage_type=?, agent_type=?, "
+            "updated_at=datetime('now') WHERE id=? RETURNING *",
+            (name, body, stage_type, agent_type, prompt_id),
         )
         prompt = await cursor.fetchone()
         await db.commit()
@@ -73,7 +88,8 @@ async def delete_prompt(prompt_id: int):
 
 @router.get("/{prompt_id}/edit", response_class=HTMLResponse)
 async def edit_prompt_form(request: Request, prompt_id: int):
-    from clean_room.main import templates
+    from build_your_room.main import templates
+
     db = await get_db(DB_PATH)
     try:
         cursor = await db.execute("SELECT * FROM prompts WHERE id=?", (prompt_id,))
@@ -87,7 +103,8 @@ async def edit_prompt_form(request: Request, prompt_id: int):
 
 @router.get("/{prompt_id}/row", response_class=HTMLResponse)
 async def prompt_row(request: Request, prompt_id: int):
-    from clean_room.main import templates
+    from build_your_room.main import templates
+
     db = await get_db(DB_PATH)
     try:
         cursor = await db.execute("SELECT * FROM prompts WHERE id=?", (prompt_id,))

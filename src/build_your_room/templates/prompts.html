@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Prompts - Build Your Room{% endblock %}
+{% block content %}
+<h1>Prompts</h1>
+<table id="prompts-table">
+    <thead>
+        <tr><th>Name</th><th>Stage</th><th>Agent</th><th>Preview</th><th>Actions</th></tr>
+    </thead>
+    <tbody id="prompt-list">
+        {% for prompt in prompts %}
+        {% include "partials/prompt_row.html" %}
+        {% endfor %}
+    </tbody>
+</table>
+<h2>New Prompt</h2>
+<form hx-post="/prompts" hx-target="#prompt-list" hx-swap="beforeend" hx-on::after-request="if(event.detail.successful) this.reset()">
+    <label>Name <input type="text" name="name" required></label>
+    <label>Stage Type
+        <select name="stage_type">
+            <option value="spec_author">Spec Author</option>
+            <option value="spec_review">Spec Review</option>
+            <option value="impl_plan">Impl Plan</option>
+            <option value="impl_plan_review">Impl Plan Review</option>
+            <option value="impl_task">Impl Task</option>
+            <option value="code_review">Code Review</option>
+            <option value="bug_fix">Bug Fix</option>
+            <option value="validation">Validation</option>
+            <option value="custom" selected>Custom</option>
+        </select>
+    </label>
+    <label>Agent Type
+        <select name="agent_type">
+            <option value="claude" selected>Claude</option>
+            <option value="codex">Codex</option>
+        </select>
+    </label>
+    <label>Body <textarea name="body" rows="10" required></textarea></label>
+    <button type="submit">Create</button>
+</form>
+{% endblock %}

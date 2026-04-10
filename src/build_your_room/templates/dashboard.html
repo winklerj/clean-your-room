@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Dashboard - Build Your Room{% endblock %}
+{% block content %}
+<h1>Build Your Room</h1>
+
+<div class="stats-cards">
+    <div class="stat-card stat-card-total">
+        <div class="stat-number">{{ total_repos }}</div>
+        <div class="stat-label">Repos</div>
+    </div>
+</div>
+
+<p><a href="/repos/new">Add Repo</a></p>
+
+{% if repos %}
+<table>
+    <thead>
+        <tr>
+            <th>Name</th>
+            <th>Path</th>
+            <th>Branch</th>
+            <th>Added</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for repo in repos %}
+        <tr>
+            <td><a href="/repos/{{ repo['id'] }}">{{ repo['name'] }}</a></td>
+            <td><code>{{ repo['local_path'] }}</code></td>
+            <td>{{ repo['default_branch'] }}</td>
+            <td>{{ repo['created_at'] }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p>No repos yet. Add one to get started.</p>
+{% endif %}
+{% endblock %}

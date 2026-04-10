@@ -1,0 +1,10 @@
+<tr id="prompt-{{ prompt['id'] }}">
+    <td>{{ prompt['name'] }}</td>
+    <td>{{ prompt['stage_type'] }}</td>
+    <td>{{ prompt['agent_type'] }}</td>
+    <td><code>{{ prompt['body'][:80] }}{% if prompt['body']|length > 80 %}...{% endif %}</code></td>
+    <td>
+        <button hx-get="/prompts/{{ prompt['id'] }}/edit" hx-target="#prompt-{{ prompt['id'] }}" hx-swap="outerHTML">Edit</button>
+        <button hx-delete="/prompts/{{ prompt['id'] }}" hx-target="#prompt-{{ prompt['id'] }}" hx-swap="outerHTML">Delete</button>
+    </td>
+</tr>

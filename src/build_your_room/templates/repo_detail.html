@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}{{ repo['name'] }} - Build Your Room{% endblock %}
+{% block content %}
+<h1>{{ repo['name'] }}</h1>
+<p>
+    Path: <code>{{ repo['local_path'] }}</code>
+    | Branch: {{ repo['default_branch'] }}
+    {% if repo['git_url'] %}
+    | <a href="{{ repo['git_url'] }}" target="_blank">Remote</a>
+    {% endif %}
+    | <form style="display:inline" method="post" action="/repos/{{ repo['id'] }}/archive">
+        <button type="submit">Archive</button>
+    </form>
+</p>
+{% endblock %}

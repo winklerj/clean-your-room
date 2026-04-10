@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Add Repo - Build Your Room{% endblock %}
+{% block content %}
+<h1>Add Repo</h1>
+<form method="post" action="/repos">
+    <label>Name
+        <input type="text" name="name" placeholder="my-project" required>
+    </label>
+    <label>Local Path
+        <input type="text" name="local_path" placeholder="/path/to/repo" required>
+    </label>
+    <label>Git URL (optional)
+        <input type="text" name="git_url" placeholder="https://github.com/org/repo">
+    </label>
+    <label>Default Branch
+        <input type="text" name="default_branch" value="main">
+    </label>
+    <button type="submit">Add Repo</button>
+</form>
+{% endblock %}
