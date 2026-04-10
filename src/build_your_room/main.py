@@ -23,6 +23,7 @@ from build_your_room.routes.pipeline_defs import router as pipeline_defs_router
 from build_your_room.routes.pipelines import router as pipelines_router
 from build_your_room.routes.prompts import router as prompts_router
 from build_your_room.routes.repos import router as repos_router
+from build_your_room.routes.streams import router as streams_router
 from build_your_room.streaming import LogBuffer
 
 logger = logging.getLogger(__name__)
@@ -71,3 +72,4 @@ app.include_router(pipeline_defs_router)
 app.include_router(pipelines_router)
 app.include_router(prompts_router)
 app.include_router(repos_router)
+app.include_router(streams_router)

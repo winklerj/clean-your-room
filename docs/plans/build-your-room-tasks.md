@@ -50,3 +50,4 @@ Tracking progress on the build-your-room spec implementation plan.
 
 - [x] 30. JSON API for programmatic access (routes/api.py) — 10 endpoints, 36 tests (924 total)
 - [x] 31. Pipeline creation form and lifecycle control HTML routes — GET /pipelines/new, POST /pipelines, cancel/kill/pause/resume HTML routes, action buttons in detail page, 28 tests (952 total)
+- [x] 32. SSE streaming endpoints — GET /pipelines/{id}/stream (pipeline-scoped) and GET /sessions/{id}/stream (session-scoped) via LogBuffer + sse-starlette EventSourceResponse, pipeline detail template upgraded to SSE-first with HTMX polling fallback, 17 tests (969 total)

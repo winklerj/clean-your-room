@@ -897,10 +897,11 @@ async def test_pipeline_logs_partial(client):
 
 
 @pytest.mark.asyncio
-async def test_pipeline_detail_logs_htmx_polling(client):
-    """The log container has HTMX polling attributes for live updates.
+async def test_pipeline_detail_logs_sse_streaming(client):
+    """Running pipelines use SSE for live log streaming with HTMX fallback.
 
-    Invariant: pipeline-logs div has hx-get and hx-trigger for SSE-like polling.
+    Invariant: active pipelines have EventSource pointing at the stream endpoint;
+    HTMX polling attributes are set via JS fallback (not in initial HTML).
     """
     repo_id = await _seed_repo()
     def_id = await _seed_pipeline_def()
@@ -908,8 +909,10 @@ async def test_pipeline_detail_logs_htmx_polling(client):
 
     resp = await client.get(f"/pipelines/{pid}")
     assert resp.status_code == 200
-    assert f'hx-get="/pipelines/{pid}/logs"' in resp.text
-    assert 'hx-trigger="every 5s"' in resp.text
+    assert f"/pipelines/{pid}/stream" in resp.text
+    assert "EventSource" in resp.text
+    # HTMX polling is set via JS fallback, not statically in the HTML
+    assert f"/pipelines/{pid}/logs" in resp.text
 
 
 # ---------------------------------------------------------------------------

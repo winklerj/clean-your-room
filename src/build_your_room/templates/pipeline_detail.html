@@ -223,13 +223,32 @@
 
 {# ---- Live logs ---- #}
 <h2>Logs</h2>
-<div class="pipeline-logs"
-     id="pipeline-logs"
-     hx-get="/pipelines/{{ pipeline.id }}/logs"
-     hx-trigger="every 5s"
-     hx-swap="innerHTML">
+<div class="pipeline-logs" id="pipeline-logs">
     {% include "partials/pipeline_logs.html" %}
 </div>
+{% if not is_terminal %}
+<script>
+(function() {
+    var logsEl = document.getElementById('pipeline-logs');
+    var evtSrc = new EventSource('/pipelines/{{ pipeline.id }}/stream');
+    evtSrc.addEventListener('log', function(e) {
+        var entry = document.createElement('div');
+        entry.className = 'log-entry log-sse';
+        entry.textContent = e.data;
+        logsEl.appendChild(entry);
+        logsEl.scrollTop = logsEl.scrollHeight;
+    });
+    evtSrc.onerror = function() {
+        evtSrc.close();
+        /* Fall back to HTMX polling on SSE failure */
+        logsEl.setAttribute('hx-get', '/pipelines/{{ pipeline.id }}/logs');
+        logsEl.setAttribute('hx-trigger', 'every 5s');
+        logsEl.setAttribute('hx-swap', 'innerHTML');
+        if (window.htmx) { htmx.process(logsEl); }
+    };
+})();
+</script>
+{% endif %}
 
 {# ---- Clone management ---- #}
 <h2>Clone</h2>
