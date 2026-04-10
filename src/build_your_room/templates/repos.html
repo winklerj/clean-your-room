@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}Repos - Build Your Room{% endblock %}
+{% block content %}
+<div class="repos-header">
+    <h1>Repos</h1>
+    <a href="/repos/new" class="btn-new-pipeline">Add Repo</a>
+</div>
+
+<div class="stats-cards repos-stats">
+    <div class="stat-card stat-card-total">
+        <div class="stat-number">{{ total_repos }}</div>
+        <div class="stat-label">Total Repos</div>
+    </div>
+</div>
+
+{% if include_archived %}
+<p class="repos-filter"><a href="/repos">Hide archived</a></p>
+{% elif archived_count > 0 %}
+<p class="repos-filter"><a href="/repos?show_archived=true">Show {{ archived_count }} archived</a></p>
+{% endif %}
+
+{% if repos %}
+<div class="repo-list">
+    {% for repo in repos %}
+    <div class="repo-card{% if repo['archived'] %} repo-card-archived{% endif %}">
+        <div class="repo-card-header">
+            <a href="/repos/{{ repo['id'] }}" class="repo-card-title">{{ repo['name'] }}</a>
+            {% if repo['archived'] %}
+            <span class="status-badge status-cancelled">archived</span>
+            {% endif %}
+        </div>
+
+        <div class="repo-card-path">
+            <code>{{ repo['local_path'] }}</code>
+        </div>
+
+        <div class="repo-card-meta">
+            <span>Branch: <strong>{{ repo['default_branch'] }}</strong></span>
+            {% if repo['git_url'] %}
+            <span>| <a href="{{ repo['git_url'] }}" target="_blank" rel="noopener">Remote</a></span>
+            {% endif %}
+        </div>
+
+        <div class="repo-card-pipelines">
+            {% if repo['pipeline_total'] > 0 %}
+            <span class="repo-pipeline-count">{{ repo['pipeline_total'] }} pipeline{{ "s" if repo['pipeline_total'] != 1 else "" }}</span>
+            {% if repo['pipeline_running'] > 0 %}
+            <span class="repo-pipeline-stat repo-stat-running">{{ repo['pipeline_running'] }} running</span>
+            {% endif %}
+            {% if repo['pipeline_completed'] > 0 %}
+            <span class="repo-pipeline-stat repo-stat-completed">{{ repo['pipeline_completed'] }} completed</span>
+            {% endif %}
+            {% if repo['pipeline_failed'] > 0 %}
+            <span class="repo-pipeline-stat repo-stat-failed">{{ repo['pipeline_failed'] }} failed</span>
+            {% endif %}
+            {% else %}
+            <span class="repo-pipeline-none">No pipelines yet</span>
+            {% endif %}
+        </div>
+
+        {% if repo['latest_pipeline'] %}
+        <div class="repo-card-latest">
+            Latest:
+            <a href="/pipelines/{{ repo['latest_pipeline']['pipeline_id'] }}">
+                {{ repo['latest_pipeline']['def_name'] }}
+            </a>
+            <span class="status-badge status-{{ repo['latest_pipeline']['status'] }}">
+                {{ repo['latest_pipeline']['status'] }}
+            </span>
+        </div>
+        {% endif %}
+
+        <div class="repo-card-actions">
+            <a href="/pipelines/new?repo_id={{ repo['id'] }}" class="btn-action-link">New Pipeline</a>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<p class="empty-state">No repos yet. <a href="/repos/new">Add one</a> to get started.</p>
+{% endif %}
+{% endblock %}

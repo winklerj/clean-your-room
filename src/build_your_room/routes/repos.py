@@ -9,6 +9,81 @@ from build_your_room.db import get_pool
 router = APIRouter(prefix="/repos")
 
 
+async def _fetch_repos_data(*, include_archived: bool = False) -> dict[str, Any]:
+    """Query repos with pipeline counts and recent pipeline info."""
+    pool = get_pool()
+    async with pool.connection() as conn:
+        where = "" if include_archived else "WHERE r.archived = 0"
+        cur = await conn.execute(
+            f"SELECT r.* FROM repos r {where} ORDER BY r.created_at DESC"
+        )
+        repos: list[dict[str, Any]] = await cur.fetchall()  # type: ignore[assignment]
+
+        # Pipeline counts and latest pipeline per repo
+        cur = await conn.execute(
+            "SELECT p.repo_id, p.status, COUNT(*) AS cnt "
+            "FROM pipelines p GROUP BY p.repo_id, p.status"
+        )
+        status_rows: list[dict[str, Any]] = await cur.fetchall()  # type: ignore[assignment]
+        status_by_repo: dict[int, dict[str, int]] = {}
+        for row in status_rows:
+            rid = row["repo_id"]
+            if rid not in status_by_repo:
+                status_by_repo[rid] = {}
+            status_by_repo[rid][row["status"]] = row["cnt"]
+
+        # Most recent pipeline per repo (for "last activity")
+        cur = await conn.execute(
+            "SELECT DISTINCT ON (p.repo_id) "
+            "  p.repo_id, p.id AS pipeline_id, p.status, p.updated_at, "
+            "  pd.name AS def_name "
+            "FROM pipelines p "
+            "JOIN pipeline_defs pd ON pd.id = p.pipeline_def_id "
+            "ORDER BY p.repo_id, p.updated_at DESC"
+        )
+        latest_rows: list[dict[str, Any]] = await cur.fetchall()  # type: ignore[assignment]
+        latest_by_repo: dict[int, dict[str, Any]] = {
+            row["repo_id"]: row for row in latest_rows
+        }
+
+    enriched: list[dict[str, Any]] = []
+    for r in repos:
+        rid = r["id"]
+        statuses = status_by_repo.get(rid, {})
+        total = sum(statuses.values())
+        enriched.append({
+            **r,
+            "pipeline_total": total,
+            "pipeline_running": statuses.get("running", 0),
+            "pipeline_completed": statuses.get("completed", 0),
+            "pipeline_failed": statuses.get("failed", 0),
+            "latest_pipeline": latest_by_repo.get(rid),
+        })
+
+    total_repos = len(repos)
+    archived_count = sum(1 for r in repos if r.get("archived", 0))
+
+    return {
+        "repos": enriched,
+        "total_repos": total_repos,
+        "archived_count": archived_count,
+        "include_archived": include_archived,
+    }
+
+
+@router.get("", response_class=HTMLResponse)
+async def repo_list(request: Request, show_archived: str = ""):
+    """GET /repos — dedicated repo management page."""
+    from build_your_room.main import templates
+
+    include_archived = show_archived == "true"
+    data = await _fetch_repos_data(include_archived=include_archived)
+    return templates.TemplateResponse("repos.html", {
+        "request": request,
+        **data,
+    })
+
+
 @router.post("", response_class=RedirectResponse)
 async def add_repo(
     name: str = Form(),
@@ -48,11 +123,23 @@ async def repo_detail(request: Request, repo_id: int):
     pool = get_pool()
     async with pool.connection() as conn:
         cur = await conn.execute("SELECT * FROM repos WHERE id=%s", (repo_id,))
-        repo = await cur.fetchone()
-    if not repo:
-        raise HTTPException(404, "Repo not found")
+        repo: dict[str, Any] | None = await cur.fetchone()  # type: ignore[assignment]
+        if not repo:
+            raise HTTPException(404, "Repo not found")
+
+        # All pipelines for this repo with def name
+        cur = await conn.execute(
+            "SELECT p.*, pd.name AS def_name "
+            "FROM pipelines p "
+            "JOIN pipeline_defs pd ON pd.id = p.pipeline_def_id "
+            "WHERE p.repo_id = %s "
+            "ORDER BY p.updated_at DESC",
+            (repo_id,),
+        )
+        pipelines: list[dict[str, Any]] = await cur.fetchall()  # type: ignore[assignment]
+
     return templates.TemplateResponse("repo_detail.html", {
-        "request": request, "repo": repo,
+        "request": request, "repo": repo, "pipelines": pipelines,
     })
 
 

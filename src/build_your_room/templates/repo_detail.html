@@ -2,14 +2,57 @@
 {% block title %}{{ repo['name'] }} - Build Your Room{% endblock %}
 {% block content %}
 <h1>{{ repo['name'] }}</h1>
-<p>
-    Path: <code>{{ repo['local_path'] }}</code>
-    | Branch: {{ repo['default_branch'] }}
-    {% if repo['git_url'] %}
-    | <a href="{{ repo['git_url'] }}" target="_blank">Remote</a>
-    {% endif %}
-    | <form style="display:inline" method="post" action="/repos/{{ repo['id'] }}/archive">
-        <button type="submit">Archive</button>
+
+<div class="repo-detail-meta">
+    <div class="repo-detail-path">
+        <strong>Path:</strong> <code>{{ repo['local_path'] }}</code>
+    </div>
+    <div class="repo-detail-info">
+        <span>Branch: <strong>{{ repo['default_branch'] }}</strong></span>
+        {% if repo['git_url'] %}
+        | <a href="{{ repo['git_url'] }}" target="_blank" rel="noopener">Remote</a>
+        {% endif %}
+        | Added: {{ repo['created_at'] }}
+    </div>
+</div>
+
+<div class="repo-detail-actions">
+    <a href="/pipelines/new?repo_id={{ repo['id'] }}" class="btn-new-pipeline">New Pipeline</a>
+    {% if not repo['archived'] %}
+    <form style="display:inline" method="post" action="/repos/{{ repo['id'] }}/archive"
+          onsubmit="return confirm('Archive this repo?')">
+        <button type="submit" class="btn-action btn-action-cancel">Archive</button>
     </form>
-</p>
+    {% else %}
+    <span class="status-badge status-cancelled">Archived</span>
+    {% endif %}
+</div>
+
+<h2>Pipelines</h2>
+{% if pipelines %}
+<table>
+    <thead>
+        <tr>
+            <th>ID</th>
+            <th>Definition</th>
+            <th>Status</th>
+            <th>Stage</th>
+            <th>Updated</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for p in pipelines %}
+        <tr>
+            <td><a href="/pipelines/{{ p['id'] }}">#{{ p['id'] }}</a></td>
+            <td>{{ p['def_name'] }}</td>
+            <td><span class="status-badge status-{{ p['status'] }}">{{ p['status'] }}</span></td>
+            <td>{{ p['current_stage_key'] or '-' }}</td>
+            <td>{{ p['updated_at'] }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p class="empty-state">No pipelines have run against this repo yet.</p>
+{% endif %}
 {% endblock %}
