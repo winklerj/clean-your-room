@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Escalations - Build Your Room{% endblock %}
+{% block content %}
+<h1>Escalation Queue</h1>
+
+<div class="escalation-stats">
+    <div class="stat-card stat-card-attention">
+        <div class="stat-number">{{ open_count }}</div>
+        <div class="stat-label">Open</div>
+    </div>
+    <div class="stat-card stat-card-completed">
+        <div class="stat-number">{{ resolved_count }}</div>
+        <div class="stat-label">Resolved</div>
+    </div>
+    <div class="stat-card stat-card-dismissed">
+        <div class="stat-number">{{ dismissed_count }}</div>
+        <div class="stat-label">Dismissed</div>
+    </div>
+</div>
+
+<div class="escalation-filters">
+    {% if include_resolved %}
+    <a href="/escalations">Show open only</a>
+    {% else %}
+    <a href="/escalations?show_all=1">Show all (including resolved)</a>
+    {% endif %}
+</div>
+
+{% if escalations %}
+<div class="escalation-list">
+    {% for esc in escalations %}
+    {% include "partials/escalation_card.html" %}
+    {% endfor %}
+</div>
+{% else %}
+<p class="empty-state">
+    {% if include_resolved %}
+    No escalations found.
+    {% else %}
+    No open escalations. All clear!
+    {% endif %}
+</p>
+{% endif %}
+{% endblock %}

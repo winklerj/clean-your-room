@@ -32,7 +32,7 @@ Tracking progress on the build-your-room spec implementation plan.
 ## Phase 4: Dashboard
 
 - [x] 19. Dashboard template with pipeline cards grid + HTN progress indicators
-- [ ] 20. Escalation queue page
+- [x] 20. Escalation queue page
 - [ ] 21. Pipeline detail page with stage-graph viz, HTN task tree, lease health, dirty-snapshot visibility, and live logs
 - [ ] 22. Pipeline builder form with explicit node/edge editing
 - [ ] 23. Prompt management (extend existing)

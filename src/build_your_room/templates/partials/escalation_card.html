@@ -1,0 +1,56 @@
+<div class="escalation-card escalation-{{ esc.status }}" id="escalation-{{ esc.id }}">
+    <div class="escalation-card-header">
+        <div class="escalation-card-title">
+            <a href="/pipelines/{{ esc.pipeline_id }}">{{ esc.def_name }}</a>
+            <span class="status-badge status-{{ esc.status }}">{{ esc.status }}</span>
+        </div>
+        <div class="escalation-card-meta">
+            <span class="escalation-repo">{{ esc.repo_name }}</span>
+            {% if esc.stage_type %}
+            &middot; <span class="escalation-stage">{{ esc.stage_type }}</span>
+            {% endif %}
+        </div>
+    </div>
+
+    <div class="escalation-card-reason">
+        <span class="reason-badge reason-{{ esc.reason }}">{{ esc.reason | replace('_', ' ') }}</span>
+    </div>
+
+    {% if esc.context %}
+    <div class="escalation-card-context">
+        <details>
+            <summary>Context snapshot</summary>
+            <pre class="context-snapshot">{{ esc.context_json }}</pre>
+        </details>
+    </div>
+    {% endif %}
+
+    {% if esc.resolution %}
+    <div class="escalation-card-resolution">
+        <strong>Resolution:</strong> {{ esc.resolution }}
+    </div>
+    {% endif %}
+
+    <div class="escalation-card-footer">
+        <span class="escalation-time">{{ esc.created_at }}</span>
+        <span class="escalation-pipeline-status">Pipeline: {{ esc.pipeline_status }}</span>
+    </div>
+
+    {% if esc.status == 'open' %}
+    <div class="escalation-card-actions">
+        <form class="escalation-resolve-form"
+              method="post"
+              action="/escalations/{{ esc.id }}/resolve">
+            <input type="text" name="resolution" placeholder="Resolution..." required
+                   class="resolve-input">
+            <button type="submit" class="btn-resolve">Resolve</button>
+        </form>
+        <form method="post"
+              action="/escalations/{{ esc.id }}/dismiss"
+              class="escalation-dismiss-form">
+            <button type="submit" class="btn-dismiss"
+                    onclick="return confirm('Dismiss this escalation?')">Dismiss</button>
+        </form>
+    </div>
+    {% endif %}
+</div>
