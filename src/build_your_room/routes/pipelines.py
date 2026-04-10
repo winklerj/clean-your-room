@@ -582,6 +582,55 @@ async def cleanup_pipeline_clone(request: Request, pipeline_id: int):
     return RedirectResponse(url=f"/pipelines/{pipeline_id}", status_code=303)
 
 
+# ---------------------------------------------------------------------------
+# HTN decision task resolution
+# ---------------------------------------------------------------------------
+
+
+@router.post("/pipelines/{pipeline_id}/tasks/{task_id}/resolve")
+async def resolve_decision_task_html(
+    pipeline_id: int,
+    task_id: int,
+    resolution: str = Form(...),
+):
+    """Resolve a decision-type HTN task from the pipeline detail page."""
+    pool = get_pool()
+    async with pool.connection() as conn:
+        # Verify pipeline exists
+        cur = await conn.execute(
+            "SELECT id FROM pipelines WHERE id = %s", (pipeline_id,)
+        )
+        if await cur.fetchone() is None:
+            return HTMLResponse("<h1>Pipeline not found</h1>", status_code=404)
+
+        # Verify task exists, belongs to this pipeline, and is a decision type
+        cur = await conn.execute(
+            "SELECT id, pipeline_id, task_type, status FROM htn_tasks "
+            "WHERE id = %s",
+            (task_id,),
+        )
+        task: dict[str, Any] | None = await cur.fetchone()  # type: ignore[assignment]
+        if task is None or task["pipeline_id"] != pipeline_id:
+            return HTMLResponse("<h1>Task not found</h1>", status_code=404)
+
+        if task["task_type"] != "decision":
+            return HTMLResponse(
+                "<h1>Only decision tasks can be resolved</h1>", status_code=409,
+            )
+
+        if task["status"] == "completed":
+            return RedirectResponse(
+                url=f"/pipelines/{pipeline_id}", status_code=303,
+            )
+
+    from build_your_room.htn_planner import HTNPlanner
+
+    planner = HTNPlanner(pool)
+    await planner.resolve_decision(task_id, resolution)
+
+    return RedirectResponse(url=f"/pipelines/{pipeline_id}", status_code=303)
+
+
 @router.post("/pipelines/cleanup-completed")
 async def cleanup_completed_clones():
     """Bulk cleanup clones for all completed/cancelled/killed pipelines."""

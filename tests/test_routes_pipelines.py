@@ -661,10 +661,10 @@ async def test_pipeline_detail_htn_complexity(client):
 
 @pytest.mark.asyncio
 async def test_pipeline_detail_htn_decision_task(client):
-    """Decision-type tasks show a resolve button.
+    """Decision-type tasks show an inline resolve form.
 
     Invariant: tasks with task_type='decision' and status != 'completed'
-    get a link to the escalation queue.
+    get an inline resolution form pointing to the resolve endpoint.
     """
     repo_id = await _seed_repo()
     def_id = await _seed_pipeline_def()
@@ -677,7 +677,9 @@ async def test_pipeline_detail_htn_decision_task(client):
     resp = await client.get(f"/pipelines/{pid}")
     assert resp.status_code == 200
     assert "btn-decision" in resp.text
-    assert "Resolve decision" in resp.text
+    assert "Resolve" in resp.text
+    assert f"/pipelines/{pid}/tasks/" in resp.text
+    assert 'name="resolution"' in resp.text
 
 
 @pytest.mark.asyncio

@@ -39,7 +39,10 @@
 
             {% if task.task_type == 'decision' and task.status != 'completed' %}
             <div class="task-decision-action">
-                <a href="/escalations" class="btn-decision">Resolve decision</a>
+                <form method="post" action="/pipelines/{{ pipeline.id }}/tasks/{{ task.id }}/resolve" class="decision-form">
+                    <input type="text" name="resolution" placeholder="Enter resolution…" required class="decision-input" />
+                    <button type="submit" class="btn-decision">Resolve</button>
+                </form>
             </div>
             {% endif %}
 
