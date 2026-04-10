@@ -19,7 +19,7 @@ Tracking progress on the build-your-room spec implementation plan.
 - [x] 10. ClaudeAgentAdapter with live session handles, explicit tool profiles, context monitoring, and workspace confinement
 - [x] 11. CodexAppServerAdapter with stdio JSON-RPC protocol, persistent threads, and workspace-write sandboxing
 - [ ] 12. Review loop logic with structured approval parsing, same-session continuation, and restart fallback
-- [ ] 13. Adapter unit tests with mocked agent responses
+- [x] 13. Adapter unit tests with mocked agent responses (82 tests: 37 Claude + 45 Codex)
 
 ## Phase 3: Stage runners
 
