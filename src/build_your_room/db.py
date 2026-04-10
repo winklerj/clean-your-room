@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import json
 import logging
+from pathlib import Path
 
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
 from build_your_room.config import DATABASE_URL
+
+SPECS_DIR = Path(__file__).resolve().parent.parent.parent / "specs"
 
 logger = logging.getLogger(__name__)
 
@@ -175,7 +179,24 @@ CREATE TABLE IF NOT EXISTS htn_task_deps (
 DEFAULT_PROMPTS: list[tuple[str, str, str, str]] = [
     (
         "spec_author_default",
-        "Study the repository and produce a formal specification document.",
+        (
+            "You are a specification author. Study the repository thoroughly — read "
+            "CLAUDE.md, AGENTS.md, existing source code, and tests — then produce a "
+            "formal specification document.\n\n"
+            "The specification must include:\n"
+            "- Overview and motivation\n"
+            "- Core invariants the system must maintain\n"
+            "- Data model with all entities and relationships\n"
+            "- API or interface contracts\n"
+            "- State machine descriptions for any stateful components\n"
+            "- Error handling and edge cases\n"
+            "- Security considerations\n\n"
+            "Write the spec as a Markdown document. Be precise and unambiguous. "
+            "Define preconditions and postconditions for each operation. "
+            "Identify invariants that must hold across all state transitions.\n\n"
+            "The spec will be reviewed using formal reasoning (TLA+-style mental "
+            "simulation), so ensure logical consistency throughout."
+        ),
         "spec_author",
         "claude",
     ),
@@ -206,18 +227,56 @@ DEFAULT_PROMPTS: list[tuple[str, str, str, str]] = [
             "- type: 'compound' (needs subtasks) or 'primitive' (directly implementable)\n"
             "- preconditions: what must be true before starting\n"
             "- postconditions: what must be true after completion\n"
+            "- invariants: what must remain true throughout execution\n"
             "- dependencies: which other tasks must complete first\n"
             "- estimated_complexity: trivial/small/medium/large/epic\n"
-            "- priority: relative importance (higher = do first)"
+            "- priority: relative importance (higher = do first)\n\n"
+            "Decompose compound tasks until all leaves are primitive tasks that a "
+            "single agent session can complete in one focused iteration. Each primitive "
+            "task should be completable within ~40% of the context window.\n\n"
+            "Output as JSON matching the HTN task schema provided."
         ),
         "impl_plan",
         "claude",
     ),
     (
         "impl_plan_review_default",
-        "Review the implementation plan for completeness, ordering, and feasibility.",
+        (
+            "Review the implementation plan for completeness, ordering, and "
+            "feasibility. Mentally simulate execution of the task graph:\n\n"
+            "Check for:\n"
+            "- Missing tasks that the spec requires but the plan omits\n"
+            "- Circular or impossible dependency chains\n"
+            "- Tasks too large for a single agent session (~40% context budget)\n"
+            "- Incorrect ordering (tasks depending on outputs not yet produced)\n"
+            "- Missing preconditions or postconditions\n"
+            "- Ambiguous task boundaries that could cause merge conflicts\n\n"
+            "Return structured JSON output with your assessment."
+        ),
         "impl_plan_review",
         "codex",
+    ),
+    (
+        "impl_task_default",
+        (
+            "You are an implementation agent working on a coding task from the "
+            "project's hierarchical task plan.\n\n"
+            "Study the existing code, specs in specs/*, and AGENTS.md for context "
+            "before making changes.\n\n"
+            "Important:\n"
+            "- For design decisions, stop and explain. The harness will create an "
+            "escalation.\n"
+            "- Use the harness verification tools, which execute repo-standard "
+            "commands from AGENTS.md / CLAUDE.md\n"
+            "- Write a diary entry summarizing what you learned\n"
+            "- If the harness rotates you for context, resume THIS SAME task unless "
+            "it explicitly tells you the claim was released\n"
+            "- Do not push or publish anything. The harness records local checkpoint "
+            "revisions after verification.\n\n"
+            "Focus on THIS task only. Make the code production-ready."
+        ),
+        "impl_task",
+        "claude",
     ),
     (
         "code_review_default",
@@ -250,6 +309,33 @@ DEFAULT_PROMPTS: list[tuple[str, str, str, str]] = [
         "bug_fix",
         "codex",
     ),
+    (
+        "validation_default",
+        (
+            "You are a validation agent. Verify that the implementation meets all "
+            "requirements and quality standards.\n\n"
+            "Validation checklist:\n"
+            "1. All tests pass (including property-based tests)\n"
+            "2. Linting is clean\n"
+            "3. Type checking passes\n"
+            "4. If web UI: browser validation passed\n"
+            "5. Task list is updated\n"
+            "6. Diary entry is written\n\n"
+            "When writing tests, prefer property-based testing over unit tests:\n"
+            "- Python projects: use Hypothesis\n"
+            "- JavaScript/TypeScript projects: use fast-check\n"
+            "- Web UI testing: use Bombadil (antithesishq/bombadil)\n"
+            "- Only write unit tests for pure edge-case coverage that properties "
+            "can't capture\n\n"
+            "Properties to test:\n"
+            "- Idempotency: f(f(x)) == f(x) where applicable\n"
+            "- Round-trip: deserialize(serialize(x)) == x\n"
+            "- Invariant preservation: state transitions maintain invariants\n"
+            "- Commutativity: where operations should be order-independent"
+        ),
+        "validation",
+        "claude",
+    ),
 ]
 
 SEED_PROMPTS_SQL = """
@@ -257,6 +343,18 @@ INSERT INTO prompts (name, body, stage_type, agent_type)
 VALUES (%s, %s, %s, %s)
 ON CONFLICT (name) DO NOTHING
 """
+
+
+def load_default_prompts_json(
+    path: Path | None = None,
+) -> list[dict[str, str]]:
+    """Load default prompts from the specs/default_prompts.json file.
+
+    Returns a list of dicts with keys: name, body, stage_type, agent_type.
+    """
+    json_path = path or SPECS_DIR / "default_prompts.json"
+    with open(json_path) as f:
+        return json.load(f)
 
 # ---------------------------------------------------------------------------
 # Pool management

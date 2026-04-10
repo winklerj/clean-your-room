@@ -44,4 +44,4 @@ Tracking progress on the build-your-room spec implementation plan.
 - [x] 26. Integration tests with mock adapters + `pytest-postgresql`
 - [x] 27. Devbrowser recording integration in validation stage
 - [x] 28. Documentation (README, CLAUDE.md, AGENTS.md)
-- [ ] 29. Default prompt templates for all stage types
+- [x] 29. Default prompt templates for all stage types

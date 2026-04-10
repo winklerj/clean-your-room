@@ -1,0 +1,118 @@
+{
+  "name": "full-coding-pipeline",
+  "stage_graph_json": {
+    "entry_stage": "spec_author",
+    "nodes": [
+      {
+        "key": "spec_author",
+        "name": "Spec authoring",
+        "type": "spec_author",
+        "agent": "claude",
+        "prompt": "spec_author_default",
+        "model": "claude-opus-4-6",
+        "max_iterations": 1,
+        "review": {
+          "agent": "codex",
+          "prompt": "spec_review_default",
+          "model": "gpt-5.1-codex",
+          "max_review_rounds": 5,
+          "exit_condition": "structured_approval",
+          "on_max_rounds": "escalate"
+        },
+        "context_threshold_pct": 60
+      },
+      {
+        "key": "impl_plan",
+        "name": "Implementation plan",
+        "type": "impl_plan",
+        "agent": "claude",
+        "prompt": "impl_plan_default",
+        "model": "claude-opus-4-6",
+        "max_iterations": 1,
+        "review": {
+          "agent": "codex",
+          "prompt": "impl_plan_review_default",
+          "model": "gpt-5.1-codex",
+          "max_review_rounds": 5,
+          "exit_condition": "structured_approval",
+          "on_max_rounds": "escalate"
+        },
+        "context_threshold_pct": 60
+      },
+      {
+        "key": "impl_task",
+        "name": "Implementation",
+        "type": "impl_task",
+        "agent": "claude",
+        "prompt": "impl_task_default",
+        "model": "claude-sonnet-4-6",
+        "max_iterations": 50,
+        "context_threshold_pct": 60,
+        "on_context_limit": "resume_current_claim"
+      },
+      {
+        "key": "code_review",
+        "name": "Code review + bug fix",
+        "type": "code_review",
+        "agent": "codex",
+        "prompt": "code_review_default",
+        "model": "gpt-5.1-codex",
+        "max_iterations": 3,
+        "fix_agent": "codex",
+        "fix_prompt": "bug_fix_default",
+        "on_max_rounds": "escalate"
+      },
+      {
+        "key": "validation",
+        "name": "Validation",
+        "type": "validation",
+        "agent": "claude",
+        "prompt": "validation_default",
+        "model": "claude-sonnet-4-6",
+        "max_iterations": 3,
+        "uses_devbrowser": true,
+        "record_on_success": true
+      }
+    ],
+    "edges": [
+      {
+        "key": "spec_to_plan",
+        "from": "spec_author",
+        "to": "impl_plan",
+        "on": "approved"
+      },
+      {
+        "key": "plan_to_impl",
+        "from": "impl_plan",
+        "to": "impl_task",
+        "on": "approved"
+      },
+      {
+        "key": "impl_to_review",
+        "from": "impl_task",
+        "to": "code_review",
+        "on": "stage_complete"
+      },
+      {
+        "key": "review_to_validation",
+        "from": "code_review",
+        "to": "validation",
+        "on": "approved"
+      },
+      {
+        "key": "validation_back_to_review",
+        "from": "validation",
+        "to": "code_review",
+        "on": "validation_failed",
+        "max_visits": 3,
+        "on_exhausted": "escalate"
+      },
+      {
+        "key": "validation_to_done",
+        "from": "validation",
+        "to": "completed",
+        "on": "validated"
+      }
+    ]
+  }
+}

@@ -992,8 +992,7 @@ async def test_prompt_resolved_from_db(
 
     async with pool.connection() as conn:
         await conn.execute(
-            "INSERT INTO prompts (name, body, stage_type, agent_type) "
-            "VALUES ('validation_default', 'Run browser checks.', 'validation', 'claude')"
+            "UPDATE prompts SET body = 'Run browser checks.' WHERE name = 'validation_default'"
         )
         await conn.execute(
             "UPDATE pipelines SET config_json = %s WHERE id = %s",
