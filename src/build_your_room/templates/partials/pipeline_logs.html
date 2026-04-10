@@ -1,0 +1,13 @@
+{% if logs %}
+<div class="log-entries">
+    {% for log in logs %}
+    <div class="log-entry log-{{ log.event_type }}">
+        <span class="log-time">{{ log.created_at }}</span>
+        <span class="log-type">{{ log.event_type }}</span>
+        <span class="log-content">{{ log.content }}</span>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<p class="empty-state">No log entries yet.</p>
+{% endif %}

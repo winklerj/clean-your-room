@@ -18,6 +18,7 @@ from build_your_room.db import close_pool, get_pool, init_db
 from build_your_room.orchestrator import PipelineOrchestrator
 from build_your_room.routes.dashboard import router as dashboard_router
 from build_your_room.routes.escalations import router as escalations_router
+from build_your_room.routes.pipelines import router as pipelines_router
 from build_your_room.routes.prompts import router as prompts_router
 from build_your_room.routes.repos import router as repos_router
 from build_your_room.streaming import LogBuffer
@@ -63,5 +64,6 @@ if static_dir.is_dir():
 
 app.include_router(dashboard_router)
 app.include_router(escalations_router)
+app.include_router(pipelines_router)
 app.include_router(prompts_router)
 app.include_router(repos_router)

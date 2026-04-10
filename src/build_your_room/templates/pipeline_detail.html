@@ -1,0 +1,224 @@
+{% extends "base.html" %}
+{% block title %}{{ pipeline.def_name }} - Pipeline #{{ pipeline.id }}{% endblock %}
+{% block content %}
+<h1>
+    {{ pipeline.def_name }}
+    <span class="status-badge status-{{ pipeline.status }}">{{ pipeline.status }}</span>
+</h1>
+
+<div class="pipeline-detail-meta">
+    <span class="detail-repo">{{ pipeline.repo_name }}</span>
+    <span class="detail-cost">${{ "%.2f"|format(total_cost) }}</span>
+    {% if pipeline.current_stage_key %}
+    <span class="detail-stage">Stage: {{ pipeline.current_stage_key }}</span>
+    {% endif %}
+</div>
+
+{# ---- Lease health + workspace state ---- #}
+<div class="pipeline-health">
+    {% if lease_healthy %}
+    <span class="lease-indicator lease-healthy" title="Lease active">&#x2764; Lease active</span>
+    {% elif pipeline.status == 'running' %}
+    <span class="lease-indicator lease-unhealthy" title="No active lease">&#x26A0; No active lease</span>
+    {% endif %}
+
+    {% if workspace_dirty %}
+    <span class="workspace-indicator workspace-dirty">Workspace: {{ pipeline.workspace_state }}</span>
+    {% endif %}
+
+    {% if has_dirty_snapshot %}
+    <div class="dirty-snapshot-banner">
+        Dirty snapshot captured: <code>{{ pipeline.dirty_snapshot_artifact }}</code>
+    </div>
+    {% endif %}
+</div>
+
+{# ---- Stage graph visualization ---- #}
+<h2>Stage Graph</h2>
+<div class="stage-graph">
+    <div class="stage-graph-nodes">
+        {% for node in graph.nodes %}
+        <div class="stage-node {% if node.is_active %}stage-node-active{% endif %}"
+             id="node-{{ node.key }}">
+            <div class="stage-node-name">{{ node.name }}</div>
+            <div class="stage-node-type">{{ node.type }}</div>
+            <div class="stage-node-agent">{{ node.agent }}</div>
+            {% if node.visit_count > 0 %}
+            <div class="stage-node-visits">{{ node.visit_count }} visit{{ "s" if node.visit_count != 1 else "" }}</div>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+    <div class="stage-graph-edges">
+        {% for edge in graph.edges %}
+        <div class="stage-edge">
+            <span class="edge-from">{{ edge['from'] }}</span>
+            <span class="edge-arrow">&rarr;</span>
+            <span class="edge-to">{{ edge.to }}</span>
+            <span class="edge-guard">on: {{ edge.on }}</span>
+            {% if edge.max_visits %}
+            <span class="edge-budget">max {{ edge.max_visits }} visits</span>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+</div>
+
+{# ---- Stage execution history ---- #}
+<h2>Stages</h2>
+{% if stages %}
+<div class="stage-tabs">
+    {% for stage in stages %}
+    <div class="stage-tab {% if stage.stage_key == pipeline.current_stage_key and stage.attempt == stage.visit_number %}stage-tab-active{% endif %}"
+         id="stage-{{ stage.id }}">
+        <div class="stage-tab-header">
+            <span class="stage-tab-key">{{ stage.stage_key }}</span>
+            {% if stage.visit_number > 1 %}
+            <span class="stage-tab-attempt">(attempt {{ stage.attempt }})</span>
+            {% endif %}
+            <span class="status-badge status-{{ stage.status }}">{{ stage.status }}</span>
+        </div>
+
+        <div class="stage-tab-body">
+            <div class="stage-tab-info">
+                <span>Type: {{ stage.stage_type }}</span>
+                <span>Agent: {{ stage.agent_type }}</span>
+                {% if stage.max_iterations > 1 %}
+                <span>Iteration: {{ stage.iteration }}/{{ stage.max_iterations }}</span>
+                {% endif %}
+                {% if stage.entry_rev %}
+                <span>Entry rev: <code>{{ stage.entry_rev[:12] }}</code></span>
+                {% endif %}
+                {% if stage.exit_rev %}
+                <span>Exit rev: <code>{{ stage.exit_rev[:12] }}</code></span>
+                {% endif %}
+            </div>
+
+            {% if stage.output_artifact %}
+            <div class="stage-tab-artifact">
+                Output: <code>{{ stage.output_artifact }}</code>
+            </div>
+            {% endif %}
+
+            {% if stage.escalation_reason %}
+            <div class="stage-tab-escalation">
+                Escalated: {{ stage.escalation_reason | replace('_', ' ') }}
+            </div>
+            {% endif %}
+
+            {# Sessions within this stage #}
+            {% if stage.sessions %}
+            <div class="stage-sessions">
+                <h4>Sessions ({{ stage.sessions | length }})</h4>
+                {% for sess in stage.sessions %}
+                <div class="session-row session-{{ sess.status }}">
+                    <span class="session-type">{{ sess.session_type }}</span>
+                    <span class="status-badge status-{{ sess.status }}">{{ sess.status }}</span>
+                    {% if sess.context_usage_pct is not none %}
+                    <span class="session-context">context {{ "%.0f"|format(sess.context_usage_pct) }}%</span>
+                    {% endif %}
+                    <span class="session-cost">${{ "%.4f"|format(sess.cost_usd) }}</span>
+                    <span class="session-tokens">{{ sess.token_input + sess.token_output }} tokens</span>
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% else %}
+<p class="empty-state">No stages executed yet.</p>
+{% endif %}
+
+{# ---- HTN task tree ---- #}
+<h2>HTN Task Tree</h2>
+{% if task_tree %}
+<div class="htn-summary-bar">
+    {% if htn_total > 0 %}
+    <div class="progress-bar">
+        <div class="progress-fill progress-htn" style="width: {{ htn_pct }}%"></div>
+    </div>
+    <span>{{ htn_completed }}/{{ htn_total }} primitive tasks completed ({{ htn_pct }}%)</span>
+    {% endif %}
+    {% if htn_counts.get('in_progress', 0) > 0 %}
+    <span class="htn-active">{{ htn_counts.in_progress }} active</span>
+    {% endif %}
+    {% if htn_counts.get('failed', 0) > 0 %}
+    <span class="htn-failed-count">{{ htn_counts.failed }} failed</span>
+    {% endif %}
+    {% if htn_counts.get('blocked', 0) > 0 %}
+    <span class="htn-blocked-count">{{ htn_counts.blocked }} blocked</span>
+    {% endif %}
+</div>
+
+<div class="htn-tree">
+    {% for task in task_tree %}
+    {% include "partials/htn_task_node.html" %}
+    {% endfor %}
+</div>
+{% else %}
+<p class="empty-state">No HTN tasks for this pipeline.</p>
+{% endif %}
+
+{# ---- Escalations ---- #}
+{% if escalations %}
+<h2>Escalations</h2>
+<div class="pipeline-escalations">
+    {% for esc in escalations %}
+    <div class="escalation-row escalation-{{ esc.status }}">
+        <span class="reason-badge reason-{{ esc.reason }}">{{ esc.reason | replace('_', ' ') }}</span>
+        <span class="status-badge status-{{ esc.status }}">{{ esc.status }}</span>
+        {% if esc.stage_type %}
+        <span class="escalation-stage-ref">{{ esc.stage_type }}</span>
+        {% endif %}
+        {% if esc.resolution %}
+        <span class="escalation-resolution">{{ esc.resolution }}</span>
+        {% endif %}
+        <span class="escalation-time">{{ esc.created_at }}</span>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+{# ---- Live logs ---- #}
+<h2>Logs</h2>
+<div class="pipeline-logs"
+     id="pipeline-logs"
+     hx-get="/pipelines/{{ pipeline.id }}/logs"
+     hx-trigger="every 5s"
+     hx-swap="innerHTML">
+    {% include "partials/pipeline_logs.html" %}
+</div>
+
+{# ---- Clone management ---- #}
+<h2>Clone</h2>
+<div class="clone-management">
+    <div class="clone-path">
+        <code class="clone-path-text">{{ pipeline.clone_path }}</code>
+        <button class="btn-copy-path"
+                onclick="navigator.clipboard.writeText('{{ pipeline.clone_path }}')">
+            Copy path
+        </button>
+    </div>
+
+    {% if pipeline.review_base_rev %}
+    <div class="clone-rev">
+        Base rev: <code>{{ pipeline.review_base_rev[:12] }}</code>
+        {% if pipeline.head_rev %}
+        &rarr; Head: <code>{{ pipeline.head_rev[:12] }}</code>
+        {% endif %}
+    </div>
+    {% endif %}
+
+    {% if is_terminal %}
+    <div class="clone-actions">
+        <button class="btn-cleanup"
+                hx-post="/pipelines/{{ pipeline.id }}/cleanup"
+                hx-confirm="Delete clone for this pipeline?">
+            Clean up clone
+        </button>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

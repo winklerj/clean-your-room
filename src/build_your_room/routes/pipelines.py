@@ -18,9 +18,9 @@ _TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled", "killed"})
 # Status → CSS color class mapping for HTN tasks
 _TASK_STATUS_CLASS = {
     "completed": "task-completed",
-    "in_progress": "task-in-progress",
+    "in_progress": "task-in_progress",
     "ready": "task-ready",
-    "not_ready": "task-not-ready",
+    "not_ready": "task-not_ready",
     "blocked": "task-blocked",
     "failed": "task-failed",
     "skipped": "task-skipped",

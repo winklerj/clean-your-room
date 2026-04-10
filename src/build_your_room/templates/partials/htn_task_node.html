@@ -1,0 +1,61 @@
+<div class="htn-task-node {{ task.status_class }}" id="task-{{ task.id }}">
+    <div class="htn-task-header">
+        {% if task.children %}
+        <details {% if task.status == 'in_progress' %}open{% endif %}>
+            <summary>
+                <span class="task-name">{{ task.name }}</span>
+                <span class="task-type-badge task-type-{{ task.task_type }}">{{ task.task_type }}</span>
+                <span class="status-badge status-{{ task.status }}">{{ task.status }}</span>
+            </summary>
+        {% else %}
+            <span class="task-name">{{ task.name }}</span>
+            <span class="task-type-badge task-type-{{ task.task_type }}">{{ task.task_type }}</span>
+            <span class="status-badge status-{{ task.status }}">{{ task.status }}</span>
+        {% endif %}
+
+        <div class="htn-task-body">
+            <div class="task-description">{{ task.description }}</div>
+
+            {% if task.estimated_complexity %}
+            <span class="task-complexity">{{ task.estimated_complexity }}</span>
+            {% endif %}
+
+            {% if task.assigned_session_id %}
+            <span class="task-session">Session #{{ task.assigned_session_id }}</span>
+            {% endif %}
+
+            {% if task.checkpoint_rev %}
+            <span class="task-checkpoint">Checkpoint: <code>{{ task.checkpoint_rev[:12] }}</code></span>
+            {% endif %}
+
+            {% if task.diary_entry %}
+            <div class="task-diary">
+                <details>
+                    <summary>Diary entry</summary>
+                    <div class="diary-content">{{ task.diary_entry }}</div>
+                </details>
+            </div>
+            {% endif %}
+
+            {% if task.task_type == 'decision' and task.status != 'completed' %}
+            <div class="task-decision-action">
+                <a href="/escalations" class="btn-decision">Resolve decision</a>
+            </div>
+            {% endif %}
+
+            {% if task.children %}
+            <div class="htn-task-children">
+                {% for child in task.children %}
+                {% with task=child %}
+                {% include "partials/htn_task_node.html" %}
+                {% endwith %}
+                {% endfor %}
+            </div>
+            {% endif %}
+        </div>
+
+        {% if task.children %}
+        </details>
+        {% endif %}
+    </div>
+</div>
