@@ -81,6 +81,14 @@ async def repo_list(request: Request, show_archived: str = ""):
     return templates.TemplateResponse(request, "repos.html", data)
 
 
+@router.get("/new", response_class=HTMLResponse)
+async def new_repo_form(request: Request):
+    """GET /repos/new — add repo form."""
+    from build_your_room.main import templates
+
+    return templates.TemplateResponse(request, "new_repo.html", {})
+
+
 @router.post("", response_class=RedirectResponse)
 async def add_repo(
     name: str = Form(),

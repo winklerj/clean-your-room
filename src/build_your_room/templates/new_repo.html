@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Add Repo - Build Your Room{% endblock %}
+{% block content %}
+<h1>Add Repo</h1>
+
+<form method="post" action="/repos" class="new-pipeline-form">
+    <label>
+        <span class="field-label">Name</span>
+        <input type="text" name="name" required placeholder="my-project">
+    </label>
+
+    <label>
+        <span class="field-label">Local Path</span>
+        <input type="text" name="local_path" required placeholder="/home/user/projects/my-project">
+    </label>
+
+    <label>
+        <span class="field-label">Git URL (optional)</span>
+        <input type="text" name="git_url" placeholder="https://github.com/user/repo.git">
+    </label>
+
+    <label>
+        <span class="field-label">Default Branch</span>
+        <input type="text" name="default_branch" value="main">
+    </label>
+
+    <div class="builder-actions">
+        <button type="submit" class="btn-create">Add Repo</button>
+        <a href="/repos" class="btn-cancel">Cancel</a>
+    </div>
+</form>
+{% endblock %}

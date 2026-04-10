@@ -240,6 +240,67 @@ async def test_repo_list_add_repo_button(client):
     assert "/repos/new" in resp.text
 
 
+# ---- New repo form (GET /repos/new) ----
+
+
+@pytest.mark.asyncio
+async def test_new_repo_form_renders(client):
+    """GET /repos/new returns 200 with the add-repo form page."""
+    resp = await client.get("/repos/new")
+    assert resp.status_code == 200
+    assert "Add Repo" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_new_repo_form_has_required_fields(client):
+    """GET /repos/new contains name, local_path, git_url, and default_branch fields."""
+    resp = await client.get("/repos/new")
+    assert resp.status_code == 200
+    body = resp.text
+    assert 'name="name"' in body
+    assert 'name="local_path"' in body
+    assert 'name="git_url"' in body
+    assert 'name="default_branch"' in body
+
+
+@pytest.mark.asyncio
+async def test_new_repo_form_posts_to_repos(client):
+    """GET /repos/new form action submits to POST /repos."""
+    resp = await client.get("/repos/new")
+    assert resp.status_code == 200
+    assert 'action="/repos"' in resp.text
+
+
+@pytest.mark.asyncio
+async def test_new_repo_form_cancel_link(client):
+    """GET /repos/new has a cancel link back to /repos."""
+    resp = await client.get("/repos/new")
+    assert resp.status_code == 200
+    assert 'href="/repos"' in resp.text
+
+
+@pytest.mark.asyncio
+async def test_new_repo_form_default_branch_value(client):
+    """GET /repos/new pre-fills default_branch with 'main'."""
+    resp = await client.get("/repos/new")
+    assert resp.status_code == 200
+    assert 'value="main"' in resp.text
+
+
+@pytest.mark.asyncio
+async def test_new_repo_form_submit_creates_repo(client, tmp_path):
+    """Submitting the add-repo form creates a repo and redirects to its detail page."""
+    repo_dir = tmp_path / "submit-test"
+    repo_dir.mkdir()
+    resp = await client.post("/repos", data={
+        "name": "submit-repo",
+        "local_path": str(repo_dir),
+        "default_branch": "main",
+    }, follow_redirects=False)
+    assert resp.status_code == 303
+    assert resp.headers["location"].startswith("/repos/")
+
+
 # ---- Enhanced repo detail ----
 
 

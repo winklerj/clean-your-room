@@ -409,7 +409,8 @@ input[type="text"], input[type="url"], input[type="number"] { width: 100%; paddi
 /* New pipeline form */
 .new-pipeline-form { max-width: 500px; }
 .new-pipeline-form label { margin-bottom: 1rem; }
-.new-pipeline-form select { width: 100%; padding: 0.4rem 0.5rem; border: 1px solid #ccc; border-radius: 3px; font-size: 0.95em; }
+.new-pipeline-form select,
+.new-pipeline-form input[type="text"] { width: 100%; padding: 0.4rem 0.5rem; border: 1px solid #ccc; border-radius: 3px; font-size: 0.95em; box-sizing: border-box; }
 .field-label { display: block; font-weight: 600; color: #555; font-size: 0.9em; margin-bottom: 0.25rem; }
 
 /* Pipeline lifecycle action buttons */
