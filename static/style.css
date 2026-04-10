@@ -274,3 +274,43 @@ input[type="text"], input[type="url"], input[type="number"] { width: 100%; paddi
 .btn-copy-path:hover { background: #f5f5f5; }
 .clone-rev { font-size: 0.85em; color: #666; margin-bottom: 0.5rem; }
 .clone-actions { margin-top: 0.5rem; }
+
+/* Pipeline builder */
+.builder-error { background: #f8d7da; border: 1px solid #f5c6cb; border-radius: 6px; padding: 0.75rem 1rem; margin-bottom: 1.5rem; color: #721c24; font-weight: 600; }
+
+.builder-defs-list { margin-bottom: 2rem; }
+.builder-def-card { border: 1px solid #ddd; border-radius: 6px; padding: 0.75rem 1rem; margin-bottom: 0.5rem; background: #fff; }
+.builder-def-header { display: flex; justify-content: space-between; align-items: center; }
+.builder-def-name { font-weight: 700; font-size: 1.05em; }
+.builder-def-meta { font-size: 0.85em; color: #888; }
+.builder-def-entry { font-size: 0.85em; color: #666; margin-top: 0.25rem; }
+
+.builder-form-section { margin-bottom: 2rem; }
+.builder-section { border: 1px solid #ddd; border-radius: 6px; padding: 1rem; margin-bottom: 1rem; }
+.builder-section legend { font-weight: 700; padding: 0 0.5rem; }
+
+.builder-field { margin-bottom: 0.5rem; }
+.builder-field label { display: block; font-size: 0.85em; font-weight: 600; color: #555; margin-bottom: 0.15rem; }
+.builder-field input[type="text"], .builder-field input[type="number"], .builder-field select { width: 100%; padding: 0.3rem 0.5rem; border: 1px solid #ccc; border-radius: 3px; font-size: 0.9em; box-sizing: border-box; }
+.builder-field-sm { flex: 1; min-width: 0; }
+
+.builder-row { display: flex; gap: 0.75rem; margin-bottom: 0.25rem; }
+
+.builder-node, .builder-edge { border: 1px solid #e1e4e8; border-radius: 6px; padding: 0.75rem; margin-bottom: 0.75rem; background: #fafafa; }
+.builder-node-header, .builder-edge-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; }
+
+.builder-review-config { margin-top: 0.5rem; }
+.builder-review-config summary { font-size: 0.85em; color: #0366d6; cursor: pointer; font-weight: 600; }
+.builder-review-config[open] { padding-top: 0.5rem; }
+
+.btn-add { display: inline-block; padding: 0.3rem 0.75rem; border: 1px dashed #3498db; border-radius: 4px; background: transparent; color: #3498db; font-weight: 600; cursor: pointer; font-size: 0.9em; margin-top: 0.5rem; }
+.btn-add:hover { background: #d0e8ff; border-style: solid; }
+
+.btn-remove { font-size: 0.8em; padding: 0.15rem 0.5rem; border: 1px solid #d9534f; border-radius: 3px; background: #fff; color: #d9534f; cursor: pointer; }
+.btn-remove:hover { background: #f8d7da; }
+
+.builder-actions { display: flex; gap: 0.75rem; align-items: center; margin-top: 1rem; }
+.btn-create { padding: 0.5rem 1.5rem; border: none; border-radius: 4px; background: #3498db; color: #fff; font-weight: 700; font-size: 1em; cursor: pointer; }
+.btn-create:hover { background: #2980b9; }
+.btn-cancel { padding: 0.5rem 1rem; border: 1px solid #ccc; border-radius: 4px; background: #fff; color: #666; text-decoration: none; font-size: 0.9em; }
+.btn-cancel:hover { background: #f5f5f5; }

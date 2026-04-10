@@ -1,0 +1,286 @@
+{% extends "base.html" %}
+{% block title %}Pipeline Definitions - Build Your Room{% endblock %}
+{% block content %}
+<h1>Pipeline Definitions</h1>
+
+{% if error %}
+<div class="builder-error">{{ error }}</div>
+{% endif %}
+
+{% if pipeline_defs %}
+<section class="builder-defs-list">
+    <h2>Existing Definitions</h2>
+    {% for d in pipeline_defs %}
+    <div class="builder-def-card">
+        <div class="builder-def-header">
+            <span class="builder-def-name">{{ d.name }}</span>
+            <span class="builder-def-meta">{{ d.node_count }} stages, {{ d.edge_count }} edges</span>
+        </div>
+        <div class="builder-def-entry">Entry: <code>{{ d.entry_stage }}</code></div>
+    </div>
+    {% endfor %}
+</section>
+{% endif %}
+
+<section class="builder-form-section">
+    <h2>Create Pipeline Definition</h2>
+    <form method="post" action="/pipeline-defs" id="builder-form">
+        <div class="builder-field">
+            <label for="def-name">Definition Name</label>
+            <input type="text" id="def-name" name="name" required
+                   placeholder="e.g. full-coding-pipeline">
+        </div>
+
+        <div class="builder-field">
+            <label for="entry-stage">Entry Stage Key</label>
+            <input type="text" id="entry-stage" name="entry_stage" required
+                   placeholder="e.g. spec_author">
+        </div>
+
+        <fieldset class="builder-section">
+            <legend>Stage Nodes</legend>
+            <div id="nodes-container"></div>
+            <button type="button" class="btn-add" onclick="addNode()">+ Add Stage Node</button>
+        </fieldset>
+
+        <fieldset class="builder-section">
+            <legend>Transition Edges</legend>
+            <div id="edges-container"></div>
+            <button type="button" class="btn-add" onclick="addEdge()">+ Add Edge</button>
+        </fieldset>
+
+        <div class="builder-actions">
+            <button type="submit" class="btn-create">Create Definition</button>
+            <a href="/pipeline-defs" class="btn-cancel">Cancel</a>
+        </div>
+    </form>
+</section>
+
+<template id="node-template">
+    <div class="builder-node" data-index="IDX">
+        <div class="builder-node-header">
+            <strong>Stage Node</strong>
+            <button type="button" class="btn-remove" onclick="removeRow(this)">Remove</button>
+        </div>
+        <div class="builder-row">
+            <div class="builder-field builder-field-sm">
+                <label>Key</label>
+                <input type="text" name="node_IDX_key" required placeholder="e.g. spec_author">
+            </div>
+            <div class="builder-field builder-field-sm">
+                <label>Name</label>
+                <input type="text" name="node_IDX_name" placeholder="e.g. Spec Authoring">
+            </div>
+            <div class="builder-field builder-field-sm">
+                <label>Stage Type</label>
+                <select name="node_IDX_type">
+                    {% for t in stage_types %}
+                    <option value="{{ t }}">{{ t }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+        <div class="builder-row">
+            <div class="builder-field builder-field-sm">
+                <label>Agent</label>
+                <select name="node_IDX_agent">
+                    {% for a in agent_types %}
+                    <option value="{{ a }}">{{ a }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="builder-field builder-field-sm">
+                <label>Prompt</label>
+                <input type="text" name="node_IDX_prompt" list="prompt-names" placeholder="Prompt name">
+            </div>
+            <div class="builder-field builder-field-sm">
+                <label>Model</label>
+                <input type="text" name="node_IDX_model" value="claude-sonnet-4-6" placeholder="Model ID">
+            </div>
+        </div>
+        <div class="builder-row">
+            <div class="builder-field builder-field-sm">
+                <label>Max Iterations</label>
+                <input type="number" name="node_IDX_max_iterations" value="1" min="1">
+            </div>
+            <div class="builder-field builder-field-sm">
+                <label>Context Threshold %</label>
+                <input type="number" name="node_IDX_context_threshold_pct" value="60" min="1" max="100">
+            </div>
+            <div class="builder-field builder-field-sm">
+                <label>On Context Limit</label>
+                <select name="node_IDX_on_context_limit">
+                    <option value="">(none)</option>
+                    {% for o in on_context_limit_options %}
+                    <option value="{{ o }}">{{ o }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+        <div class="builder-row">
+            <div class="builder-field builder-field-sm">
+                <label>On Max Rounds</label>
+                <select name="node_IDX_on_max_rounds">
+                    <option value="">(default: escalate)</option>
+                    {% for o in on_max_rounds_options %}
+                    <option value="{{ o }}">{{ o }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="builder-field builder-field-sm">
+                <label>Fix Agent</label>
+                <select name="node_IDX_fix_agent">
+                    <option value="">(none)</option>
+                    {% for a in agent_types %}
+                    <option value="{{ a }}">{{ a }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="builder-field builder-field-sm">
+                <label>Fix Prompt</label>
+                <input type="text" name="node_IDX_fix_prompt" list="prompt-names" placeholder="Fix prompt name">
+            </div>
+        </div>
+        <div class="builder-row">
+            <div class="builder-field builder-field-sm">
+                <label><input type="checkbox" name="node_IDX_uses_devbrowser"> Uses Dev Browser</label>
+            </div>
+            <div class="builder-field builder-field-sm">
+                <label><input type="checkbox" name="node_IDX_record_on_success"> Record on Success</label>
+            </div>
+        </div>
+        <details class="builder-review-config">
+            <summary>Review Configuration (optional)</summary>
+            <div class="builder-row">
+                <div class="builder-field builder-field-sm">
+                    <label>Review Agent</label>
+                    <select name="node_IDX_review_agent">
+                        <option value="">(no review)</option>
+                        {% for a in agent_types %}
+                        <option value="{{ a }}">{{ a }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="builder-field builder-field-sm">
+                    <label>Review Prompt</label>
+                    <input type="text" name="node_IDX_review_prompt" list="prompt-names" placeholder="Review prompt">
+                </div>
+                <div class="builder-field builder-field-sm">
+                    <label>Review Model</label>
+                    <input type="text" name="node_IDX_review_model" placeholder="Model ID">
+                </div>
+            </div>
+            <div class="builder-row">
+                <div class="builder-field builder-field-sm">
+                    <label>Max Review Rounds</label>
+                    <input type="number" name="node_IDX_review_max_rounds" value="5" min="1">
+                </div>
+                <div class="builder-field builder-field-sm">
+                    <label>Exit Condition</label>
+                    <select name="node_IDX_review_exit_condition">
+                        {% for o in exit_condition_options %}
+                        <option value="{{ o }}">{{ o }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="builder-field builder-field-sm">
+                    <label>On Max Rounds</label>
+                    <select name="node_IDX_review_on_max_rounds">
+                        {% for o in on_max_rounds_options %}
+                        <option value="{{ o }}">{{ o }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+            </div>
+        </details>
+    </div>
+</template>
+
+<template id="edge-template">
+    <div class="builder-edge" data-index="IDX">
+        <div class="builder-edge-header">
+            <strong>Edge</strong>
+            <button type="button" class="btn-remove" onclick="removeRow(this)">Remove</button>
+        </div>
+        <div class="builder-row">
+            <div class="builder-field builder-field-sm">
+                <label>Key</label>
+                <input type="text" name="edge_IDX_key" required placeholder="e.g. spec_to_plan">
+            </div>
+            <div class="builder-field builder-field-sm">
+                <label>From</label>
+                <input type="text" name="edge_IDX_from" required placeholder="Source stage key">
+            </div>
+            <div class="builder-field builder-field-sm">
+                <label>To</label>
+                <input type="text" name="edge_IDX_to" required placeholder="Target stage key or 'completed'">
+            </div>
+        </div>
+        <div class="builder-row">
+            <div class="builder-field builder-field-sm">
+                <label>On (guard)</label>
+                <select name="edge_IDX_on">
+                    {% for c in edge_conditions %}
+                    <option value="{{ c }}">{{ c }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div class="builder-field builder-field-sm">
+                <label>Max Visits (optional)</label>
+                <input type="number" name="edge_IDX_max_visits" min="1" placeholder="Unlimited">
+            </div>
+            <div class="builder-field builder-field-sm">
+                <label>On Exhausted</label>
+                <select name="edge_IDX_on_exhausted">
+                    <option value="">(none)</option>
+                    {% for o in on_exhausted_options %}
+                    <option value="{{ o }}">{{ o }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+    </div>
+</template>
+
+<datalist id="prompt-names">
+    {% for p in prompts %}
+    <option value="{{ p.name }}">{{ p.stage_type }} ({{ p.agent_type }})</option>
+    {% endfor %}
+</datalist>
+
+<script>
+let nodeCount = 0;
+let edgeCount = 0;
+
+function addNode() {
+    const tpl = document.getElementById('node-template');
+    const clone = tpl.content.cloneNode(true);
+    const div = clone.querySelector('.builder-node');
+    div.dataset.index = nodeCount;
+    div.querySelectorAll('[name]').forEach(function(el) {
+        el.name = el.name.replace(/IDX/g, nodeCount);
+    });
+    document.getElementById('nodes-container').appendChild(clone);
+    nodeCount++;
+}
+
+function addEdge() {
+    const tpl = document.getElementById('edge-template');
+    const clone = tpl.content.cloneNode(true);
+    const div = clone.querySelector('.builder-edge');
+    div.dataset.index = edgeCount;
+    div.querySelectorAll('[name]').forEach(function(el) {
+        el.name = el.name.replace(/IDX/g, edgeCount);
+    });
+    document.getElementById('edges-container').appendChild(clone);
+    edgeCount++;
+}
+
+function removeRow(btn) {
+    btn.closest('.builder-node, .builder-edge').remove();
+}
+
+// Start with one node and one edge
+addNode();
+</script>
+{% endblock %}
