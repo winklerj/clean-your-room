@@ -219,6 +219,37 @@ DEFAULT_PROMPTS: list[tuple[str, str, str, str]] = [
         "impl_plan_review",
         "codex",
     ),
+    (
+        "code_review_default",
+        (
+            "Review the following code diff. Assess code quality, correctness, "
+            "security, and adherence to best practices.\n\n"
+            "Look for:\n"
+            "- Bugs and logic errors\n"
+            "- Security vulnerabilities (OWASP top 10)\n"
+            "- Missing error handling\n"
+            "- Performance issues\n"
+            "- Code style and naming conventions\n"
+            "- Missing or inadequate tests\n\n"
+            "Return structured JSON output with your assessment."
+        ),
+        "code_review",
+        "codex",
+    ),
+    (
+        "bug_fix_default",
+        (
+            "You are a bug-fix agent. Address the code review issues reported below. "
+            "Fix each issue in the codebase, ensuring tests pass and code is clean.\n\n"
+            "Important:\n"
+            "- Fix all reported issues\n"
+            "- Run tests after making changes\n"
+            "- Do not introduce new issues\n"
+            "- Keep changes minimal and focused on the reported problems"
+        ),
+        "bug_fix",
+        "codex",
+    ),
 ]
 
 SEED_PROMPTS_SQL = """

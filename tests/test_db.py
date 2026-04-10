@@ -46,6 +46,8 @@ async def test_init_db_seeds_default_prompts(initialized_db):
     assert "spec_review_default" in names
     assert "impl_plan_default" in names
     assert "impl_plan_review_default" in names
+    assert "code_review_default" in names
+    assert "bug_fix_default" in names
 
     spec_author = next(r for r in rows if r["name"] == "spec_author_default")
     assert spec_author["stage_type"] == "spec_author"
@@ -54,6 +56,14 @@ async def test_init_db_seeds_default_prompts(initialized_db):
     spec_review = next(r for r in rows if r["name"] == "spec_review_default")
     assert spec_review["stage_type"] == "spec_review"
     assert spec_review["agent_type"] == "codex"
+
+    code_review = next(r for r in rows if r["name"] == "code_review_default")
+    assert code_review["stage_type"] == "code_review"
+    assert code_review["agent_type"] == "codex"
+
+    bug_fix = next(r for r in rows if r["name"] == "bug_fix_default")
+    assert bug_fix["stage_type"] == "bug_fix"
+    assert bug_fix["agent_type"] == "codex"
 
 
 @pytest.mark.asyncio
@@ -68,7 +78,7 @@ async def test_init_db_is_idempotent(initialized_db):
         row = await cur.fetchone()
         assert row is not None
         count = row["cnt"]
-    assert count == 4
+    assert count == 6
 
 
 @pytest.mark.asyncio

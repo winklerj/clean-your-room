@@ -35,6 +35,7 @@ class StageNode:
     context_threshold_pct: int = 60
     review: ReviewConfig | None = None
     on_context_limit: str | None = None  # 'resume_current_claim', 'new_session_continue', 'escalate'
+    on_max_rounds: str = "escalate"  # 'escalate', 'proceed_with_warnings'
     fix_agent: str | None = None
     fix_prompt: str | None = None
     uses_devbrowser: bool = False
@@ -108,6 +109,7 @@ class StageGraph:
                 context_threshold_pct=n.get("context_threshold_pct", 60),
                 review=review,
                 on_context_limit=n.get("on_context_limit"),
+                on_max_rounds=n.get("on_max_rounds", "escalate"),
                 fix_agent=n.get("fix_agent"),
                 fix_prompt=n.get("fix_prompt"),
                 uses_devbrowser=n.get("uses_devbrowser", False),
