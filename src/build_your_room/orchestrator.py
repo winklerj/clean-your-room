@@ -24,6 +24,7 @@ from build_your_room.config import (
 )
 from build_your_room.stage_graph import StageGraph
 from build_your_room.stages.impl_plan import run_impl_plan_stage
+from build_your_room.stages.impl_task import run_impl_task_stage
 from build_your_room.stages.spec_author import run_spec_author_stage
 from build_your_room.streaming import LogBuffer
 
@@ -483,8 +484,18 @@ class PipelineOrchestrator:
                 log_buffer=self._log_buffer,
                 cancel_event=cancel_event,
             )
+        elif node.stage_type == "impl_task" and stage_id is not None:
+            result = await run_impl_task_stage(
+                pool=self._pool,
+                pipeline_id=pipeline_id,
+                stage_id=stage_id,
+                node=node,
+                adapters=self._adapters,
+                log_buffer=self._log_buffer,
+                cancel_event=cancel_event,
+            )
         else:
-            # Remaining stage types dispatched in Tasks 16-18
+            # Remaining stage types dispatched in Tasks 17-18
             result = self._default_stage_result(node.stage_type)
 
         async with self._pool.connection() as conn:
