@@ -67,7 +67,6 @@ async def _fetch_prompts() -> list[dict[str, Any]]:
 
 
 def _builder_context(
-    request: Request,
     *,
     pipeline_defs: list[dict[str, Any]],
     prompts: list[dict[str, Any]],
@@ -75,7 +74,6 @@ def _builder_context(
 ) -> dict[str, Any]:
     """Assemble the template context for the pipeline builder page."""
     return {
-        "request": request,
         "pipeline_defs": pipeline_defs,
         "prompts": prompts,
         "stage_types": STAGE_TYPES,
@@ -236,10 +234,8 @@ async def list_pipeline_defs(request: Request):
 
     defs = await _fetch_pipeline_defs()
     prompts = await _fetch_prompts()
-    ctx = _builder_context(
-        request, pipeline_defs=defs, prompts=prompts,
-    )
-    return templates.TemplateResponse("pipeline_builder.html", ctx)
+    ctx = _builder_context(pipeline_defs=defs, prompts=prompts)
+    return templates.TemplateResponse(request, "pipeline_builder.html", ctx)
 
 
 @router.get("/pipeline-defs/new", response_class=HTMLResponse)
@@ -247,10 +243,8 @@ async def pipeline_builder_form(request: Request):
     from build_your_room.main import templates
 
     prompts = await _fetch_prompts()
-    ctx = _builder_context(
-        request, pipeline_defs=[], prompts=prompts,
-    )
-    return templates.TemplateResponse("pipeline_builder.html", ctx)
+    ctx = _builder_context(pipeline_defs=[], prompts=prompts)
+    return templates.TemplateResponse(request, "pipeline_builder.html", ctx)
 
 
 @router.post("/pipeline-defs")
@@ -281,11 +275,9 @@ async def create_pipeline_def(request: Request):
 
     if error:
         prompts = await _fetch_prompts()
-        ctx = _builder_context(
-            request, pipeline_defs=[], prompts=prompts, error=error,
-        )
+        ctx = _builder_context(pipeline_defs=[], prompts=prompts, error=error)
         return templates.TemplateResponse(
-            "pipeline_builder.html", ctx, status_code=422,
+            request, "pipeline_builder.html", ctx, status_code=422,
         )
 
     pool = get_pool()
@@ -305,11 +297,9 @@ async def create_pipeline_def(request: Request):
                 error = f"Database error: {exc}"
 
             prompts = await _fetch_prompts()
-            ctx = _builder_context(
-                request, pipeline_defs=[], prompts=prompts, error=error,
-            )
+            ctx = _builder_context(pipeline_defs=[], prompts=prompts, error=error)
             return templates.TemplateResponse(
-                "pipeline_builder.html", ctx, status_code=422,
+                request, "pipeline_builder.html", ctx, status_code=422,
             )
 
     return RedirectResponse(url="/pipeline-defs", status_code=303)

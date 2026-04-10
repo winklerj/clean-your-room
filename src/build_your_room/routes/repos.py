@@ -78,10 +78,7 @@ async def repo_list(request: Request, show_archived: str = ""):
 
     include_archived = show_archived == "true"
     data = await _fetch_repos_data(include_archived=include_archived)
-    return templates.TemplateResponse("repos.html", {
-        "request": request,
-        **data,
-    })
+    return templates.TemplateResponse(request, "repos.html", data)
 
 
 @router.post("", response_class=RedirectResponse)
@@ -138,8 +135,8 @@ async def repo_detail(request: Request, repo_id: int):
         )
         pipelines: list[dict[str, Any]] = await cur.fetchall()  # type: ignore[assignment]
 
-    return templates.TemplateResponse("repo_detail.html", {
-        "request": request, "repo": repo, "pipelines": pipelines,
+    return templates.TemplateResponse(request, "repo_detail.html", {
+        "repo": repo, "pipelines": pipelines,
     })
 
 

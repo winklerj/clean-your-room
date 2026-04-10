@@ -74,10 +74,7 @@ async def escalation_queue(request: Request):
 
     show_all = request.query_params.get("show_all", "").lower() in ("1", "true")
     data = await _fetch_escalation_data(include_resolved=show_all)
-    return templates.TemplateResponse("escalations.html", {
-        "request": request,
-        **data,
-    })
+    return templates.TemplateResponse(request, "escalations.html", data)
 
 
 @router.post("/escalations/{escalation_id}/resolve")

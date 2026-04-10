@@ -75,8 +75,7 @@ async def new_pipeline_form(request: Request, error: str | None = None):
         )
         defs: list[dict[str, Any]] = await cur.fetchall()  # type: ignore[assignment]
 
-    return templates.TemplateResponse("new_pipeline.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "new_pipeline.html", {
         "repos": repos,
         "pipeline_defs": defs,
         "error": error,
@@ -463,10 +462,7 @@ async def pipeline_detail(request: Request, pipeline_id: int):
     if data is None:
         return HTMLResponse("<h1>Pipeline not found</h1>", status_code=404)
 
-    return templates.TemplateResponse("pipeline_detail.html", {
-        "request": request,
-        **data,
-    })
+    return templates.TemplateResponse(request, "pipeline_detail.html", data)
 
 
 @router.get("/pipelines/{pipeline_id}/tasks", response_class=HTMLResponse)
@@ -565,8 +561,7 @@ async def pipeline_tasks_page(
 
     task_tree = _build_task_tree(tasks)
 
-    return templates.TemplateResponse("htn_tasks.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "htn_tasks.html", {
         "pipeline": pipeline,
         "task_tree": task_tree,
         "htn_total": htn_total,
@@ -598,8 +593,7 @@ async def pipeline_logs_partial(request: Request, pipeline_id: int):
         logs: list[dict[str, Any]] = await cur.fetchall()  # type: ignore[assignment]
         logs.reverse()
 
-    return templates.TemplateResponse("partials/pipeline_logs.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "partials/pipeline_logs.html", {
         "logs": logs,
     })
 
@@ -690,8 +684,7 @@ async def stage_detail_partial(
     if data is None:
         return HTMLResponse("<p>Stage not found</p>", status_code=404)
 
-    return templates.TemplateResponse("partials/stage_detail.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "partials/stage_detail.html", {
         "pipeline_id": pipeline_id,
         **data,
     })
@@ -806,8 +799,7 @@ async def cleanup_pipeline_clone(request: Request, pipeline_id: int):
         card_data = await _fetch_pipeline_card_data(pipeline_id)
         if card_data is None:
             return HTMLResponse("<p>Pipeline not found</p>", status_code=404)
-        return templates.TemplateResponse("partials/pipeline_card.html", {
-            "request": request,
+        return templates.TemplateResponse(request, "partials/pipeline_card.html", {
             "pipeline": card_data,
         })
 

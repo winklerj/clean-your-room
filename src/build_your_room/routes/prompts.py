@@ -115,7 +115,6 @@ def _enrich_prompts(
 
 
 def _prompt_context(
-    request: Request,
     prompts: list[dict[str, Any]],
     *,
     error: str | None = None,
@@ -131,7 +130,6 @@ def _prompt_context(
         by_agent[p["agent_type"]] = by_agent.get(p["agent_type"], 0) + 1
 
     return {
-        "request": request,
         "prompts": prompts,
         "total": total,
         "by_stage": by_stage,
@@ -156,11 +154,11 @@ async def list_prompts(
     prompts = await _fetch_prompts(stage_type=stage_type, agent_type=agent_type)
     enriched = _enrich_prompts(prompts, usage)
     ctx = _prompt_context(
-        request, enriched,
+        enriched,
         filter_stage_type=stage_type,
         filter_agent_type=agent_type,
     )
-    return templates.TemplateResponse("prompts.html", ctx)
+    return templates.TemplateResponse(request, "prompts.html", ctx)
 
 
 @router.post("", response_class=HTMLResponse)
@@ -193,9 +191,9 @@ async def create_prompt(
             usage = await _fetch_prompt_usage()
             prompts = await _fetch_prompts()
             enriched = _enrich_prompts(prompts, usage)
-            ctx = _prompt_context(request, enriched, error=error_msg)
+            ctx = _prompt_context(enriched, error=error_msg)
             return templates.TemplateResponse(
-                "prompts.html", ctx, status_code=422,
+                request, "prompts.html", ctx, status_code=422,
             )
 
     enriched_prompt = {
@@ -203,8 +201,8 @@ async def create_prompt(
         "used_by": [],
         "variables": extract_template_variables(body),
     }
-    return templates.TemplateResponse("partials/prompt_row.html", {
-        "request": request, "prompt": enriched_prompt,
+    return templates.TemplateResponse(request, "partials/prompt_row.html", {
+        "prompt": enriched_prompt,
     })
 
 
@@ -251,8 +249,8 @@ async def update_prompt(
         "used_by": usage.get(name, []),
         "variables": extract_template_variables(body),
     }
-    return templates.TemplateResponse("partials/prompt_row.html", {
-        "request": request, "prompt": enriched_prompt,
+    return templates.TemplateResponse(request, "partials/prompt_row.html", {
+        "prompt": enriched_prompt,
     })
 
 
@@ -326,8 +324,8 @@ async def clone_prompt(request: Request, prompt_id: int):
         "used_by": [],
         "variables": extract_template_variables(source["body"]),
     }
-    return templates.TemplateResponse("partials/prompt_row.html", {
-        "request": request, "prompt": enriched_prompt,
+    return templates.TemplateResponse(request, "partials/prompt_row.html", {
+        "prompt": enriched_prompt,
     })
 
 
@@ -339,8 +337,8 @@ async def edit_prompt_form(request: Request, prompt_id: int):
     async with pool.connection() as conn:
         cur = await conn.execute("SELECT * FROM prompts WHERE id=%s", (prompt_id,))
         prompt: dict[str, Any] | None = await cur.fetchone()  # type: ignore[assignment]
-    return templates.TemplateResponse("partials/prompt_form.html", {
-        "request": request, "prompt": prompt,
+    return templates.TemplateResponse(request, "partials/prompt_form.html", {
+        "prompt": prompt,
         "stage_types": STAGE_TYPES,
         "agent_types": AGENT_TYPES,
     })
@@ -361,6 +359,6 @@ async def prompt_row(request: Request, prompt_id: int):
         "used_by": usage.get(prompt["name"], []),  # type: ignore[index]
         "variables": extract_template_variables(prompt["body"]),  # type: ignore[index]
     }
-    return templates.TemplateResponse("partials/prompt_row.html", {
-        "request": request, "prompt": enriched_prompt,
+    return templates.TemplateResponse(request, "partials/prompt_row.html", {
+        "prompt": enriched_prompt,
     })
