@@ -16,6 +16,7 @@ from build_your_room.config import (
 )
 from build_your_room.db import close_pool, get_pool, init_db
 from build_your_room.orchestrator import PipelineOrchestrator
+from build_your_room.routes.api import router as api_router
 from build_your_room.routes.dashboard import router as dashboard_router
 from build_your_room.routes.escalations import router as escalations_router
 from build_your_room.routes.pipeline_defs import router as pipeline_defs_router
@@ -63,6 +64,7 @@ static_dir = BASE_DIR.parent.parent / "static"
 if static_dir.is_dir():
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
 
+app.include_router(api_router)
 app.include_router(dashboard_router)
 app.include_router(escalations_router)
 app.include_router(pipeline_defs_router)

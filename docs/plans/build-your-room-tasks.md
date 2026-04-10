@@ -45,3 +45,7 @@ Tracking progress on the build-your-room spec implementation plan.
 - [x] 27. Devbrowser recording integration in validation stage
 - [x] 28. Documentation (README, CLAUDE.md, AGENTS.md)
 - [x] 29. Default prompt templates for all stage types
+
+## Phase 6: API + Operational Completeness
+
+- [x] 30. JSON API for programmatic access (routes/api.py) — 10 endpoints, 36 tests (924 total)
