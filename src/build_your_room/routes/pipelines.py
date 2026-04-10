@@ -29,6 +29,30 @@ _TASK_STATUS_CLASS = {
 }
 
 
+def _get_clone_size(clone_path: str) -> str | None:
+    """Compute total size of a clone directory, returning a human-readable string.
+
+    Returns None if the path is empty, missing, or inaccessible.
+    """
+    if not clone_path:
+        return None
+    p = Path(clone_path)
+    if not p.is_dir():
+        return None
+    try:
+        total = sum(f.stat().st_size for f in p.rglob("*") if f.is_file())
+    except OSError:
+        return None
+    if total < 1024:
+        return f"{total} B"
+    elif total < 1024 * 1024:
+        return f"{total / 1024:.1f} KB"
+    elif total < 1024 * 1024 * 1024:
+        return f"{total / (1024 * 1024):.1f} MB"
+    else:
+        return f"{total / (1024 * 1024 * 1024):.1f} GB"
+
+
 # ---------------------------------------------------------------------------
 # Pipeline creation
 # ---------------------------------------------------------------------------
@@ -407,6 +431,9 @@ async def _fetch_pipeline_detail(pipeline_id: int) -> dict[str, Any] | None:
         for sess in sessions_by_stage.get(s["id"], []):
             total_cost += float(sess.get("cost_usd", 0) or 0)
 
+    # Clone size
+    clone_size = _get_clone_size(pipeline.get("clone_path", ""))
+
     return {
         "pipeline": pipeline,
         "graph": graph,
@@ -424,6 +451,7 @@ async def _fetch_pipeline_detail(pipeline_id: int) -> dict[str, Any] | None:
         "workspace_dirty": workspace_dirty,
         "is_terminal": pipeline["status"] in _TERMINAL_STATUSES,
         "total_cost": total_cost,
+        "clone_size": clone_size,
     }
 
 

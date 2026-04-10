@@ -230,6 +230,13 @@
         </button>
     </div>
 
+    {% if clone_size %}
+    <div class="clone-size">
+        <span class="clone-size-label">Clone size:</span>
+        <span class="clone-size-value">{{ clone_size }}</span>
+    </div>
+    {% endif %}
+
     {% if pipeline.review_base_rev %}
     <div class="clone-rev">
         Base rev: <code>{{ pipeline.review_base_rev[:12] }}</code>

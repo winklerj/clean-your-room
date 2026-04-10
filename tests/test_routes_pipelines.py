@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from pathlib import Path
 
 import pytest
 from hypothesis import HealthCheck, given, settings as hyp_settings
@@ -1084,6 +1085,124 @@ async def test_pipeline_detail_all_terminal_statuses(client):
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Tests — clone size indicator
+# ---------------------------------------------------------------------------
+
+
+def test_get_clone_size_normal_dir(tmp_path):
+    """_get_clone_size returns a human-readable size string for a directory with files.
+
+    Invariant: a non-empty directory produces a non-None string with a size unit.
+    """
+    from build_your_room.routes.pipelines import _get_clone_size
+
+    (tmp_path / "file1.txt").write_bytes(b"x" * 1024)
+    (tmp_path / "file2.txt").write_bytes(b"y" * 2048)
+
+    result = _get_clone_size(str(tmp_path))
+    assert result is not None
+    assert "KB" in result
+
+
+def test_get_clone_size_empty_dir(tmp_path):
+    """_get_clone_size returns '0 B' for an empty directory.
+
+    Invariant: a directory with no files has 0 bytes total.
+    """
+    from build_your_room.routes.pipelines import _get_clone_size
+
+    result = _get_clone_size(str(tmp_path))
+    assert result == "0 B"
+
+
+def test_get_clone_size_missing_dir():
+    """_get_clone_size returns None for a path that doesn't exist.
+
+    Invariant: missing directories gracefully return None.
+    """
+    from build_your_room.routes.pipelines import _get_clone_size
+
+    result = _get_clone_size("/nonexistent/path/12345")
+    assert result is None
+
+
+def test_get_clone_size_empty_string():
+    """_get_clone_size returns None for an empty string path.
+
+    Invariant: empty clone_path values produce None.
+    """
+    from build_your_room.routes.pipelines import _get_clone_size
+
+    assert _get_clone_size("") is None
+
+
+def test_get_clone_size_nested_files(tmp_path):
+    """_get_clone_size sums sizes across nested subdirectories.
+
+    Invariant: rglob captures files at all depths.
+    """
+    from build_your_room.routes.pipelines import _get_clone_size
+
+    sub = tmp_path / "sub" / "deep"
+    sub.mkdir(parents=True)
+    (sub / "data.bin").write_bytes(b"\x00" * (1024 * 1024 + 512 * 1024))
+
+    result = _get_clone_size(str(tmp_path))
+    assert result is not None
+    assert "MB" in result
+
+
+def test_get_clone_size_bytes_range(tmp_path):
+    """_get_clone_size shows bytes for files under 1 KB.
+
+    Invariant: sizes < 1024 display in bytes.
+    """
+    from build_your_room.routes.pipelines import _get_clone_size
+
+    (tmp_path / "tiny.txt").write_bytes(b"hi")
+
+    result = _get_clone_size(str(tmp_path))
+    assert result is not None
+    assert "B" in result
+    assert "KB" not in result
+
+
+@pytest.mark.asyncio
+async def test_pipeline_detail_clone_size_displayed(client, tmp_path):
+    """Clone size indicator appears on the pipeline detail page when clone exists.
+
+    Invariant: when clone_path points to a real directory, the size is shown.
+    """
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "main.py").write_bytes(b"x" * 2048)
+
+    repo_id = await _seed_repo()
+    def_id = await _seed_pipeline_def()
+    pid = await _seed_pipeline(repo_id, def_id, clone_path=str(tmp_path))
+
+    resp = await client.get(f"/pipelines/{pid}")
+    assert resp.status_code == 200
+    assert "clone-size" in resp.text
+    assert "Clone size:" in resp.text
+    assert "KB" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_pipeline_detail_no_clone_size_missing_dir(client):
+    """Clone size indicator is hidden when clone directory doesn't exist.
+
+    Invariant: missing clone directories don't render the size indicator.
+    """
+    repo_id = await _seed_repo()
+    def_id = await _seed_pipeline_def()
+    pid = await _seed_pipeline(repo_id, def_id, clone_path="/nonexistent/clone/path")
+
+    resp = await client.get(f"/pipelines/{pid}")
+    assert resp.status_code == 200
+    assert "clone-size" not in resp.text
+
+
 @hyp_settings(max_examples=15, deadline=None,
               suppress_health_check=[HealthCheck.function_scoped_fixture])
 @given(
@@ -1190,3 +1309,25 @@ async def test_log_event_types_render(initialized_db, event_type):
         assert resp.status_code == 200
         assert event_type in resp.text
         assert f"log-{uid}" in resp.text
+
+
+@hyp_settings(max_examples=20, deadline=None,
+              suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(
+    file_size=st.integers(min_value=0, max_value=2 * 1024 * 1024),
+)
+def test_get_clone_size_formatting(tmp_path_factory, file_size):
+    """Property: _get_clone_size always returns a valid human-readable string.
+
+    Invariant: for any file size, the result is a string ending in B, KB, MB, or GB.
+    """
+    import tempfile
+
+    from build_your_room.routes.pipelines import _get_clone_size
+
+    with tempfile.TemporaryDirectory() as d:
+        if file_size > 0:
+            Path(d, "data.bin").write_bytes(b"\x00" * file_size)
+        result = _get_clone_size(d)
+        assert result is not None
+        assert any(result.endswith(unit) for unit in ("B", "KB", "MB", "GB"))
