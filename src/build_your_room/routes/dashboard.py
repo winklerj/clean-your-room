@@ -181,10 +181,3 @@ async def dashboard(request: Request):
 
     data = await _fetch_dashboard_data()
     return templates.TemplateResponse(request, "dashboard.html", data)
-
-
-@router.get("/repos/new", response_class=HTMLResponse)
-async def add_repo_page(request: Request):
-    from build_your_room.main import templates
-
-    return templates.TemplateResponse(request, "add_repo.html")

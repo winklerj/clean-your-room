@@ -76,3 +76,7 @@ Tracking progress on the build-your-room spec implementation plan.
 ## Phase 10: Spec Route Completeness
 
 - [x] 45. Add GET /repos/new route and new_repo.html template — Spec line 1143 requires `GET /repos/new → add repo form` but only POST /repos existed. Added new_repo_form() route handler in repos.py, new_repo.html template with name/local_path/git_url/default_branch fields reusing .new-pipeline-form CSS, extended CSS for text input styling. repos.html already linked to /repos/new (was a 404). 6 new tests (form rendering, required fields, form action, cancel link, default branch value, submit flow). 1145 total tests
+
+## Phase 11: Route Conflict Fixes
+
+- [x] 46. Fix duplicate /repos/new route shadowing — dashboard.py had a stale GET /repos/new handler (returning add_repo.html) that shadowed the correct repos.py route (returning new_repo.html) because dashboard_router was included before repos_router. Removed stale route from dashboard.py, deleted orphaned add_repo.html template, added test_new_repo_form_uses_styled_template asserting new-pipeline-form/btn-cancel/field-label CSS classes. 1 new test. 1146 total tests

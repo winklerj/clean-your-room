@@ -280,6 +280,20 @@ async def test_new_repo_form_cancel_link(client):
 
 
 @pytest.mark.asyncio
+async def test_new_repo_form_uses_styled_template(client):
+    """GET /repos/new serves the styled new_repo.html, not the stale add_repo.html.
+
+    Invariant: the form uses new-pipeline-form CSS class and has a styled cancel button.
+    Context: a stale duplicate route in dashboard.py previously shadowed the correct route.
+    """
+    resp = await client.get("/repos/new")
+    assert resp.status_code == 200
+    assert "new-pipeline-form" in resp.text
+    assert "btn-cancel" in resp.text
+    assert "field-label" in resp.text
+
+
+@pytest.mark.asyncio
 async def test_new_repo_form_default_branch_value(client):
     """GET /repos/new pre-fills default_branch with 'main'."""
     resp = await client.get("/repos/new")
