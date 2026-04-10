@@ -34,7 +34,7 @@ Implemented `src/build_your_room/htn_planner.py` — a pure data-layer component
 
 - mypy's `dict_row` type inference for psycopg returns `tuple` by default. Bare `# type: ignore` on row access lines is the pragmatic fix — the orchestrator uses `# type: ignore[assignment]` on fetchone calls instead. Both work; consistency matters more than which approach.
 
-- Property-based tests with Hypothesis + pytest-postgresql need unique names per test run to avoid UNIQUE constraint violations. Using `uuid.uuid4().hex[:8]` suffixes in the seed helpers works well.
+- Property-based tests with Hypothesis + pytest-postgresql need unique names per test run to avoid UNIQUE constraint violations. Using `uuid.uuid4().hex[:8]` suffixes in the seed helpers works well. Also need `suppress_health_check=[HealthCheck.function_scoped_fixture]` since the `initialized_db` fixture is function-scoped but each hypothesis input gets its own unique pipeline.
 
 ## Test count
 
