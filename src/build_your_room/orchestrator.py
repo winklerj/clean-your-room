@@ -23,6 +23,7 @@ from build_your_room.config import (
     PIPELINES_DIR,
 )
 from build_your_room.stage_graph import StageGraph
+from build_your_room.stages.spec_author import run_spec_author_stage
 from build_your_room.streaming import LogBuffer
 
 logger = logging.getLogger(__name__)
@@ -460,8 +461,20 @@ class PipelineOrchestrator:
             # For skeleton: return a default result based on stage type
             return self._default_stage_result(node.stage_type)
 
-        # TODO(Task 10-12): Full adapter dispatch with review loops, context rotation, etc.
-        result = self._default_stage_result(node.stage_type)
+        # Dispatch to stage-specific runners
+        if node.stage_type == "spec_author" and stage_id is not None:
+            result = await run_spec_author_stage(
+                pool=self._pool,
+                pipeline_id=pipeline_id,
+                stage_id=stage_id,
+                node=node,
+                adapters=self._adapters,
+                log_buffer=self._log_buffer,
+                cancel_event=cancel_event,
+            )
+        else:
+            # Remaining stage types dispatched in Tasks 15-18
+            result = self._default_stage_result(node.stage_type)
 
         async with self._pool.connection() as conn:
             await conn.execute(
