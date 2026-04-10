@@ -228,6 +228,36 @@ def _build_stage_graph_json(
     return None, json.dumps(stage_graph)
 
 
+async def _fetch_pipeline_def_detail(def_id: int) -> dict[str, Any] | None:
+    """Fetch a single pipeline def with parsed stage graph for the detail page."""
+    pool = get_pool()
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            "SELECT * FROM pipeline_defs WHERE id = %s", (def_id,)
+        )
+        row: dict[str, Any] | None = await cur.fetchone()  # type: ignore[assignment]
+
+    if row is None:
+        return None
+
+    graph: dict[str, Any] = {}
+    try:
+        graph = json.loads(row.get("stage_graph_json", "{}"))
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    nodes: list[dict[str, Any]] = graph.get("nodes", [])
+    edges: list[dict[str, Any]] = graph.get("edges", [])
+    entry_stage = graph.get("entry_stage", "")
+
+    return {
+        "pipeline_def": row,
+        "entry_stage": entry_stage,
+        "nodes": nodes,
+        "edges": edges,
+    }
+
+
 @router.get("/pipeline-defs", response_class=HTMLResponse)
 async def list_pipeline_defs(request: Request):
     from build_your_room.main import templates
@@ -245,6 +275,57 @@ async def pipeline_builder_form(request: Request):
     prompts = await _fetch_prompts()
     ctx = _builder_context(pipeline_defs=[], prompts=prompts)
     return templates.TemplateResponse(request, "pipeline_builder.html", ctx)
+
+
+@router.get("/pipeline-defs/{def_id}/preview", response_class=HTMLResponse)
+async def pipeline_def_preview(def_id: int):
+    """Return an HTML fragment summarizing a pipeline definition's stages and flow."""
+    data = await _fetch_pipeline_def_detail(def_id)
+    if data is None:
+        return HTMLResponse("")
+
+    nodes: list[dict[str, Any]] = data["nodes"]
+    edges: list[dict[str, Any]] = data["edges"]
+    entry = data["entry_stage"]
+
+    lines: list[str] = ['<div class="def-preview">']
+    lines.append(f'<div class="def-preview-header">{len(nodes)} stage'
+                 f'{"s" if len(nodes) != 1 else ""}, '
+                 f'{len(edges)} transition{"s" if len(edges) != 1 else ""}</div>')
+    lines.append('<div class="def-preview-flow">')
+    for node in nodes:
+        marker = " (entry)" if node.get("key") == entry else ""
+        lines.append(
+            f'<div class="def-preview-stage">'
+            f'<span class="def-preview-name">{node.get("name", node.get("key", "?"))}</span>'
+            f'<span class="def-preview-type">{node.get("type", "")}{marker}</span>'
+            f'<span class="def-preview-agent">{node.get("agent", "")}</span>'
+            f'</div>'
+        )
+    lines.append('</div>')
+    if edges:
+        lines.append('<div class="def-preview-edges">')
+        for edge in edges:
+            lines.append(
+                f'<div class="def-preview-edge">'
+                f'{edge.get("from", "?")} &rarr; {edge.get("to", "?")} '
+                f'<span class="def-preview-cond">on {edge.get("on", "?")}</span>'
+                f'</div>'
+            )
+        lines.append('</div>')
+    lines.append('</div>')
+    return HTMLResponse("\n".join(lines))
+
+
+@router.get("/pipeline-defs/{def_id}", response_class=HTMLResponse)
+async def pipeline_def_detail(request: Request, def_id: int):
+    from build_your_room.main import templates
+
+    data = await _fetch_pipeline_def_detail(def_id)
+    if data is None:
+        return HTMLResponse("<h1>Pipeline definition not found</h1>", status_code=404)
+
+    return templates.TemplateResponse(request, "pipeline_def_detail.html", data)
 
 
 @router.post("/pipeline-defs")

@@ -1,0 +1,184 @@
+{% extends "base.html" %}
+{% block title %}{{ pipeline_def.name }} - Pipeline Definition{% endblock %}
+{% block content %}
+<div class="def-detail-header">
+    <h1>{{ pipeline_def.name }}</h1>
+    <a href="/pipeline-defs" class="btn-back">&larr; All Definitions</a>
+</div>
+
+<div class="def-detail-meta">
+    <span>Entry: <code>{{ entry_stage }}</code></span>
+    <span>{{ nodes|length }} stages, {{ edges|length }} edges</span>
+    <span>Created: {{ pipeline_def.created_at.strftime('%Y-%m-%d %H:%M') if pipeline_def.created_at else 'unknown' }}</span>
+</div>
+
+<section class="def-detail-section">
+    <h2>Stage Graph</h2>
+    <div class="stage-graph">
+        <div class="stage-graph-nodes">
+            {% for node in nodes %}
+            <div class="stage-node{% if node.key == entry_stage %} stage-node-active{% endif %}"
+                 id="node-{{ node.key }}">
+                <div class="stage-node-name">{{ node.name }}</div>
+                <div class="stage-node-type">{{ node.type }}</div>
+                <div class="stage-node-agent">{{ node.agent }}</div>
+            </div>
+            {% endfor %}
+        </div>
+        <div class="stage-graph-edges">
+            {% for edge in edges %}
+            <div class="stage-edge">
+                <span class="edge-from">{{ edge['from'] }}</span>
+                <span class="edge-arrow">&rarr;</span>
+                <span class="edge-to">{{ edge.to }}</span>
+                <span class="edge-guard">on: {{ edge.on }}</span>
+                {% if edge.get('max_visits') %}
+                <span class="edge-budget">max {{ edge.max_visits }} visits</span>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+</section>
+
+<section class="def-detail-section">
+    <h2>Stage Nodes</h2>
+    {% for node in nodes %}
+    <div class="def-node-card{% if node.key == entry_stage %} def-node-entry{% endif %}">
+        <div class="def-node-header">
+            <span class="def-node-key">{{ node.key }}</span>
+            <span class="def-node-name">{{ node.name }}</span>
+            {% if node.key == entry_stage %}
+            <span class="def-entry-badge">entry</span>
+            {% endif %}
+        </div>
+
+        <div class="def-node-props">
+            <div class="def-prop">
+                <span class="def-prop-label">Type</span>
+                <span class="def-prop-value">{{ node.type }}</span>
+            </div>
+            <div class="def-prop">
+                <span class="def-prop-label">Agent</span>
+                <span class="def-prop-value">{{ node.agent }}</span>
+            </div>
+            <div class="def-prop">
+                <span class="def-prop-label">Model</span>
+                <span class="def-prop-value">{{ node.model }}</span>
+            </div>
+            <div class="def-prop">
+                <span class="def-prop-label">Prompt</span>
+                <span class="def-prop-value">{{ node.prompt }}</span>
+            </div>
+            <div class="def-prop">
+                <span class="def-prop-label">Max Iterations</span>
+                <span class="def-prop-value">{{ node.max_iterations }}</span>
+            </div>
+            <div class="def-prop">
+                <span class="def-prop-label">Context Threshold</span>
+                <span class="def-prop-value">{{ node.get('context_threshold_pct', 60) }}%</span>
+            </div>
+            {% if node.get('on_context_limit') %}
+            <div class="def-prop">
+                <span class="def-prop-label">On Context Limit</span>
+                <span class="def-prop-value">{{ node.on_context_limit }}</span>
+            </div>
+            {% endif %}
+            {% if node.get('on_max_rounds') and node.on_max_rounds != 'escalate' %}
+            <div class="def-prop">
+                <span class="def-prop-label">On Max Rounds</span>
+                <span class="def-prop-value">{{ node.on_max_rounds }}</span>
+            </div>
+            {% endif %}
+            {% if node.get('fix_agent') %}
+            <div class="def-prop">
+                <span class="def-prop-label">Fix Agent</span>
+                <span class="def-prop-value">{{ node.fix_agent }}</span>
+            </div>
+            {% endif %}
+            {% if node.get('fix_prompt') %}
+            <div class="def-prop">
+                <span class="def-prop-label">Fix Prompt</span>
+                <span class="def-prop-value">{{ node.fix_prompt }}</span>
+            </div>
+            {% endif %}
+            {% if node.get('uses_devbrowser') %}
+            <div class="def-prop">
+                <span class="def-prop-label">Dev Browser</span>
+                <span class="def-prop-value">enabled</span>
+            </div>
+            {% endif %}
+            {% if node.get('record_on_success') %}
+            <div class="def-prop">
+                <span class="def-prop-label">Record on Success</span>
+                <span class="def-prop-value">enabled</span>
+            </div>
+            {% endif %}
+        </div>
+
+        {% if node.get('review') %}
+        <div class="def-review-config">
+            <h4>Review Configuration</h4>
+            <div class="def-node-props">
+                <div class="def-prop">
+                    <span class="def-prop-label">Review Agent</span>
+                    <span class="def-prop-value">{{ node.review.agent }}</span>
+                </div>
+                <div class="def-prop">
+                    <span class="def-prop-label">Review Prompt</span>
+                    <span class="def-prop-value">{{ node.review.prompt }}</span>
+                </div>
+                <div class="def-prop">
+                    <span class="def-prop-label">Review Model</span>
+                    <span class="def-prop-value">{{ node.review.model }}</span>
+                </div>
+                <div class="def-prop">
+                    <span class="def-prop-label">Max Review Rounds</span>
+                    <span class="def-prop-value">{{ node.review.max_review_rounds }}</span>
+                </div>
+                <div class="def-prop">
+                    <span class="def-prop-label">Exit Condition</span>
+                    <span class="def-prop-value">{{ node.review.exit_condition }}</span>
+                </div>
+                <div class="def-prop">
+                    <span class="def-prop-label">On Max Rounds</span>
+                    <span class="def-prop-value">{{ node.review.on_max_rounds }}</span>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+    {% endfor %}
+</section>
+
+{% if edges %}
+<section class="def-detail-section">
+    <h2>Transition Edges</h2>
+    <table class="def-edges-table">
+        <thead>
+            <tr>
+                <th>Key</th>
+                <th>From</th>
+                <th>To</th>
+                <th>Guard</th>
+                <th>Max Visits</th>
+                <th>On Exhausted</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for edge in edges %}
+            <tr>
+                <td><code>{{ edge.key }}</code></td>
+                <td><code>{{ edge['from'] }}</code></td>
+                <td><code>{{ edge.to }}</code></td>
+                <td>{{ edge.on }}</td>
+                <td>{{ edge.get('max_visits', '') }}</td>
+                <td>{{ edge.get('on_exhausted', '') }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+{% endif %}
+
+{% endblock %}

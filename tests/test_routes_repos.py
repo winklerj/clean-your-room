@@ -360,6 +360,135 @@ async def test_repo_detail_404(client):
 # ---- Property-based tests ----
 
 
+# ---- Folder browser (GET /repos/browse) ----
+
+
+@pytest.mark.asyncio
+async def test_browse_default_lists_home(client):
+    """GET /repos/browse with no path param lists the user's home directory.
+
+    Invariant: response contains the resolved home path in browse-current.
+    """
+    resp = await client.get("/repos/browse")
+    assert resp.status_code == 200
+    assert "browse-current" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_browse_lists_subdirectories(client, tmp_path):
+    """GET /repos/browse?path=... returns child directories as browse-entry elements.
+
+    Invariant: every non-hidden subdirectory appears in the listing.
+    """
+    (tmp_path / "alpha").mkdir()
+    (tmp_path / "beta").mkdir()
+    (tmp_path / "file.txt").write_text("hi")
+
+    resp = await client.get(f"/repos/browse?path={tmp_path}")
+    assert resp.status_code == 200
+    assert "alpha" in resp.text
+    assert "beta" in resp.text
+    assert "file.txt" not in resp.text
+
+
+@pytest.mark.asyncio
+async def test_browse_hides_dotfiles(client, tmp_path):
+    """GET /repos/browse omits directories starting with a dot.
+
+    Invariant: hidden directories are excluded from the listing.
+    """
+    (tmp_path / ".hidden").mkdir()
+    (tmp_path / "visible").mkdir()
+
+    resp = await client.get(f"/repos/browse?path={tmp_path}")
+    assert resp.status_code == 200
+    assert ".hidden" not in resp.text
+    assert "visible" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_browse_nonexistent_path(client, tmp_path):
+    """GET /repos/browse with a nonexistent path shows an error message.
+
+    Invariant: the response contains browse-error, not a 4xx status.
+    """
+    resp = await client.get(f"/repos/browse?path={tmp_path / 'nope'}")
+    assert resp.status_code == 200
+    assert "browse-error" in resp.text
+    assert "not found" in resp.text.lower()
+
+
+@pytest.mark.asyncio
+async def test_browse_shows_parent_link(client, tmp_path):
+    """GET /repos/browse includes a parent (..) navigation entry.
+
+    Invariant: the parent link uses the resolved parent path.
+    """
+    child = tmp_path / "sub"
+    child.mkdir()
+
+    resp = await client.get(f"/repos/browse?path={child}")
+    assert resp.status_code == 200
+    assert "browse-parent" in resp.text
+    assert str(tmp_path) in resp.text
+
+
+@pytest.mark.asyncio
+async def test_browse_empty_directory(client, tmp_path):
+    """GET /repos/browse on an empty directory shows a 'no subdirectories' message.
+
+    Invariant: browse-empty class appears when there are no child directories.
+    """
+    empty = tmp_path / "empty"
+    empty.mkdir()
+
+    resp = await client.get(f"/repos/browse?path={empty}")
+    assert resp.status_code == 200
+    assert "browse-empty" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_browse_entries_have_hx_get(client, tmp_path):
+    """Each browse entry includes an hx-get attribute for htmx navigation.
+
+    Invariant: every directory entry's hx-get points to /repos/browse with its path.
+    """
+    (tmp_path / "mydir").mkdir()
+
+    resp = await client.get(f"/repos/browse?path={tmp_path}")
+    assert resp.status_code == 200
+    assert f'hx-get="/repos/browse?path={tmp_path / "mydir"}"' in resp.text
+
+
+@pytest.mark.asyncio
+async def test_browse_entries_have_data_path(client, tmp_path):
+    """Each browse entry includes a data-path attribute for double-click selection.
+
+    Invariant: data-path contains the full resolved path of the directory.
+    """
+    (tmp_path / "pickme").mkdir()
+
+    resp = await client.get(f"/repos/browse?path={tmp_path}")
+    assert resp.status_code == 200
+    assert f'data-path="{tmp_path / "pickme"}"' in resp.text
+
+
+@pytest.mark.asyncio
+async def test_new_repo_form_has_browse_button(client):
+    """GET /repos/new includes a Browse button for the folder picker.
+
+    Invariant: the form contains the browse toggle and folder picker elements.
+    """
+    resp = await client.get("/repos/new")
+    assert resp.status_code == 200
+    assert "browse-toggle" in resp.text
+    assert "folder-picker" in resp.text
+    assert "folder-list" in resp.text
+
+
+# ---- Property-based tests ----
+
+
 @settings(
     max_examples=5,
     deadline=None,

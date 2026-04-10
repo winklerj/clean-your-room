@@ -277,6 +277,103 @@ async def test_create_pipeline_invalid_repo(client):
 
 
 # ---------------------------------------------------------------------------
+# Tests — creation form UX (preview, hints)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_new_pipeline_form_has_def_preview_target(client):
+    """GET /pipelines/new includes the def-preview container for htmx previews.
+
+    Invariant: the form has the target div and htmx wiring on the select.
+    """
+    await _seed_repo()
+    await _seed_pipeline_def()
+    resp = await client.get("/pipelines/new")
+    assert resp.status_code == 200
+    assert 'id="def-preview"' in resp.text
+    assert 'id="def-selector"' in resp.text
+
+
+@pytest.mark.asyncio
+async def test_new_pipeline_form_has_field_hint(client):
+    """GET /pipelines/new shows a hint under the pipeline def label.
+
+    Invariant: the form contains a field-hint element describing what defs do.
+    """
+    resp = await client.get("/pipelines/new")
+    assert resp.status_code == 200
+    assert "field-hint" in resp.text
+    assert "what work" in resp.text.lower()
+
+
+@pytest.mark.asyncio
+async def test_new_pipeline_form_preselects_repo(client):
+    """GET /pipelines/new?repo_id=N pre-selects the repo in the dropdown.
+
+    Invariant: the matching option has the 'selected' attribute.
+    """
+    repo_id = await _seed_repo(name="presel-repo")
+    resp = await client.get(f"/pipelines/new?repo_id={repo_id}")
+    assert resp.status_code == 200
+    assert "selected" in resp.text
+    assert "presel-repo" in resp.text
+
+
+# ---------------------------------------------------------------------------
+# Tests — pipeline detail pending state
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_pending_pipeline_shows_banner(client):
+    """GET /pipelines/{id} for a pending pipeline shows a starting-up banner.
+
+    Invariant: the pending banner explains the pipeline is initializing
+    and does not show the cancel button outside the banner.
+    """
+    repo_id = await _seed_repo()
+    def_id = await _seed_pipeline_def()
+    pid = await _seed_pipeline(repo_id, def_id, status="pending")
+
+    resp = await client.get(f"/pipelines/{pid}")
+    assert resp.status_code == 200
+    assert "pipeline-pending-banner" in resp.text
+    assert "Starting up" in resp.text
+    assert "orchestrator" in resp.text.lower()
+
+
+@pytest.mark.asyncio
+async def test_running_pipeline_no_pending_banner(client):
+    """GET /pipelines/{id} for a running pipeline does not show the pending banner.
+
+    Invariant: once running, the pending-specific messaging is gone.
+    """
+    repo_id = await _seed_repo()
+    def_id = await _seed_pipeline_def()
+    pid = await _seed_pipeline(repo_id, def_id, status="running")
+
+    resp = await client.get(f"/pipelines/{pid}")
+    assert resp.status_code == 200
+    assert "pipeline-pending-banner" not in resp.text
+
+
+@pytest.mark.asyncio
+async def test_completed_pipeline_no_pending_banner(client):
+    """GET /pipelines/{id} for a completed pipeline does not show the pending banner.
+
+    Invariant: terminal states never show the pending banner.
+    """
+    repo_id = await _seed_repo()
+    def_id = await _seed_pipeline_def()
+    pid = await _seed_pipeline(repo_id, def_id, status="completed")
+
+    resp = await client.get(f"/pipelines/{pid}")
+    assert resp.status_code == 200
+    assert "pipeline-pending-banner" not in resp.text
+
+
+# ---------------------------------------------------------------------------
 # Tests — cancel
 # ---------------------------------------------------------------------------
 

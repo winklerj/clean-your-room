@@ -11,13 +11,13 @@
 <section class="builder-defs-list">
     <h2>Existing Definitions</h2>
     {% for d in pipeline_defs %}
-    <div class="builder-def-card">
+    <a href="/pipeline-defs/{{ d.id }}" class="builder-def-card builder-def-link">
         <div class="builder-def-header">
             <span class="builder-def-name">{{ d.name }}</span>
             <span class="builder-def-meta">{{ d.node_count }} stages, {{ d.edge_count }} edges</span>
         </div>
         <div class="builder-def-entry">Entry: <code>{{ d.entry_stage }}</code></div>
-    </div>
+    </a>
     {% endfor %}
 </section>
 {% endif %}

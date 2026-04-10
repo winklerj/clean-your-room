@@ -59,7 +59,9 @@ def _get_clone_size(clone_path: str) -> str | None:
 
 
 @router.get("/pipelines/new", response_class=HTMLResponse)
-async def new_pipeline_form(request: Request, error: str | None = None):
+async def new_pipeline_form(
+    request: Request, error: str | None = None, repo_id: int | None = None,
+):
     """Render the pipeline creation form with repo and def selectors."""
     from build_your_room.main import templates
 
@@ -78,6 +80,7 @@ async def new_pipeline_form(request: Request, error: str | None = None):
     return templates.TemplateResponse(request, "new_pipeline.html", {
         "repos": repos,
         "pipeline_defs": defs,
+        "selected_repo_id": repo_id,
         "error": error,
     })
 

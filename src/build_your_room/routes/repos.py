@@ -1,12 +1,60 @@
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request, Form
+from fastapi import APIRouter, HTTPException, Request, Form, Query
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from build_your_room.db import get_pool
 
 router = APIRouter(prefix="/repos")
+
+
+@router.get("/browse", response_class=HTMLResponse)
+async def browse_directories(path: str = Query(default="")):
+    """GET /repos/browse?path=... — return directory listing as an htmx HTML fragment."""
+    if not path:
+        target = Path.home()
+    else:
+        target = Path(path).resolve()
+
+    if not target.is_dir():
+        return HTMLResponse(
+            '<div class="browse-error">Directory not found</div>', status_code=200,
+        )
+
+    parent = target.parent
+    entries: list[dict[str, str]] = []
+
+    try:
+        for child in sorted(target.iterdir()):
+            if child.name.startswith("."):
+                continue
+            if child.is_dir():
+                entries.append({"name": child.name, "path": str(child)})
+    except PermissionError:
+        return HTMLResponse(
+            '<div class="browse-error">Permission denied</div>', status_code=200,
+        )
+
+    lines: list[str] = []
+    lines.append(f'<div class="browse-current">{target}</div>')
+    if target != target.parent:
+        lines.append(
+            f'<div class="browse-entry browse-parent" '
+            f'hx-get="/repos/browse?path={parent}" hx-target="#folder-list">'
+            f'&#x2191; ..</div>'
+        )
+    for entry in entries:
+        lines.append(
+            f'<div class="browse-entry" '
+            f'hx-get="/repos/browse?path={entry["path"]}" hx-target="#folder-list" '
+            f'data-path="{entry["path"]}">'
+            f'&#128193; {entry["name"]}</div>'
+        )
+    if not entries:
+        lines.append('<div class="browse-empty">No subdirectories</div>')
+
+    return HTMLResponse("\n".join(lines))
 
 
 async def _fetch_repos_data(*, include_archived: bool = False) -> dict[str, Any]:

@@ -662,3 +662,354 @@ async def test_parse_nodes_count_matches(client, node_count):
         form.update(_minimal_node_form(i, f"stage_{i}"))
     nodes = _parse_nodes_from_form(form)
     assert len(nodes) == node_count
+
+
+# ---------------------------------------------------------------------------
+# Seed helper for detail tests
+# ---------------------------------------------------------------------------
+
+
+async def _seed_rich_pipeline_def(name: str | None = None) -> int:
+    """Insert a multi-node pipeline def with review config and return its id."""
+    pool = get_pool()
+    if name is None:
+        name = f"rich-def-{uuid.uuid4().hex[:8]}"
+    graph = json.dumps({
+        "entry_stage": "spec",
+        "nodes": [
+            {
+                "key": "spec",
+                "name": "Spec authoring",
+                "type": "spec_author",
+                "agent": "claude",
+                "prompt": "spec_author_default",
+                "model": "claude-opus-4-6",
+                "max_iterations": 1,
+                "context_threshold_pct": 60,
+                "review": {
+                    "agent": "codex",
+                    "prompt": "spec_review_default",
+                    "model": "gpt-5.1-codex",
+                    "max_review_rounds": 5,
+                    "exit_condition": "structured_approval",
+                    "on_max_rounds": "escalate",
+                },
+            },
+            {
+                "key": "impl",
+                "name": "Implementation",
+                "type": "impl_task",
+                "agent": "claude",
+                "prompt": "impl_task_default",
+                "model": "claude-sonnet-4-6",
+                "max_iterations": 50,
+                "context_threshold_pct": 60,
+                "on_context_limit": "resume_current_claim",
+            },
+            {
+                "key": "review",
+                "name": "Code review",
+                "type": "code_review",
+                "agent": "codex",
+                "prompt": "code_review_default",
+                "model": "gpt-5.1-codex",
+                "max_iterations": 3,
+                "fix_agent": "codex",
+                "fix_prompt": "bug_fix_default",
+                "on_max_rounds": "escalate",
+            },
+            {
+                "key": "validation",
+                "name": "Validation",
+                "type": "validation",
+                "agent": "claude",
+                "prompt": "validation_default",
+                "model": "claude-sonnet-4-6",
+                "max_iterations": 3,
+                "uses_devbrowser": True,
+                "record_on_success": True,
+            },
+        ],
+        "edges": [
+            {"key": "spec_to_impl", "from": "spec", "to": "impl", "on": "approved"},
+            {"key": "impl_to_review", "from": "impl", "to": "review", "on": "stage_complete"},
+            {"key": "review_to_val", "from": "review", "to": "validation", "on": "approved"},
+            {
+                "key": "val_back",
+                "from": "validation",
+                "to": "review",
+                "on": "validation_failed",
+                "max_visits": 3,
+                "on_exhausted": "escalate",
+            },
+            {"key": "val_done", "from": "validation", "to": "completed", "on": "validated"},
+        ],
+    })
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            "INSERT INTO pipeline_defs (name, stage_graph_json) "
+            "VALUES (%s, %s) RETURNING id",
+            (name, graph),
+        )
+        row = await cur.fetchone()
+        assert row is not None
+        await conn.commit()
+        return row["id"]
+
+
+# ---------------------------------------------------------------------------
+# Detail page — rendering
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_detail_page_renders(client):
+    """GET /pipeline-defs/{id} returns 200 with the definition name."""
+    def_id = await _seed_rich_pipeline_def(name="my-detail-def")
+    resp = await client.get(f"/pipeline-defs/{def_id}")
+    assert resp.status_code == 200
+    assert "my-detail-def" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_detail_page_404_for_missing(client):
+    """GET /pipeline-defs/{id} returns 404 for nonexistent id."""
+    resp = await client.get("/pipeline-defs/99999")
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_detail_shows_all_nodes(client):
+    """Detail page displays all stage node names."""
+    def_id = await _seed_rich_pipeline_def()
+    resp = await client.get(f"/pipeline-defs/{def_id}")
+    assert resp.status_code == 200
+    assert "Spec authoring" in resp.text
+    assert "Implementation" in resp.text
+    assert "Code review" in resp.text
+    assert "Validation" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_detail_shows_node_config(client):
+    """Detail page shows stage type, agent, model, prompt for each node."""
+    def_id = await _seed_rich_pipeline_def()
+    resp = await client.get(f"/pipeline-defs/{def_id}")
+    assert "spec_author" in resp.text
+    assert "impl_task" in resp.text
+    assert "claude-opus-4-6" in resp.text
+    assert "claude-sonnet-4-6" in resp.text
+    assert "spec_author_default" in resp.text
+    assert "impl_task_default" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_detail_shows_review_config(client):
+    """Detail page shows review sub-config when present."""
+    def_id = await _seed_rich_pipeline_def()
+    resp = await client.get(f"/pipeline-defs/{def_id}")
+    assert "spec_review_default" in resp.text
+    assert "gpt-5.1-codex" in resp.text
+    assert "structured_approval" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_detail_shows_edges(client):
+    """Detail page displays all edge transitions."""
+    def_id = await _seed_rich_pipeline_def()
+    resp = await client.get(f"/pipeline-defs/{def_id}")
+    assert "spec_to_impl" in resp.text
+    assert "val_back" in resp.text
+    assert "validation_failed" in resp.text
+    assert "approved" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_detail_shows_edge_max_visits(client):
+    """Detail page shows max_visits and on_exhausted for bounded edges."""
+    def_id = await _seed_rich_pipeline_def()
+    resp = await client.get(f"/pipeline-defs/{def_id}")
+    # The val_back edge has max_visits=3 and on_exhausted=escalate
+    text = resp.text
+    assert "max_visits" in text.lower() or "3" in text
+    assert "escalate" in text
+
+
+@pytest.mark.asyncio
+async def test_detail_shows_special_flags(client):
+    """Detail page shows uses_devbrowser, record_on_success, on_context_limit."""
+    def_id = await _seed_rich_pipeline_def()
+    resp = await client.get(f"/pipeline-defs/{def_id}")
+    text = resp.text.lower()
+    assert "devbrowser" in text or "dev browser" in text
+    assert "record" in text
+    assert "resume_current_claim" in text
+
+
+@pytest.mark.asyncio
+async def test_detail_shows_fix_agent(client):
+    """Detail page shows fix_agent and fix_prompt when configured."""
+    def_id = await _seed_rich_pipeline_def()
+    resp = await client.get(f"/pipeline-defs/{def_id}")
+    assert "bug_fix_default" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_detail_shows_entry_stage(client):
+    """Detail page indicates which stage is the entry point."""
+    def_id = await _seed_rich_pipeline_def()
+    resp = await client.get(f"/pipeline-defs/{def_id}")
+    # The entry_stage is "spec"
+    assert "entry" in resp.text.lower()
+
+
+@pytest.mark.asyncio
+async def test_detail_shows_stage_graph_viz(client):
+    """Detail page includes stage graph visualization nodes."""
+    def_id = await _seed_rich_pipeline_def()
+    resp = await client.get(f"/pipeline-defs/{def_id}")
+    # Should render stage-node divs for the graph visualization
+    assert "stage-node" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_detail_back_link(client):
+    """Detail page has a link back to the pipeline defs list."""
+    def_id = await _seed_rich_pipeline_def()
+    resp = await client.get(f"/pipeline-defs/{def_id}")
+    assert "/pipeline-defs" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_list_page_links_to_detail(client):
+    """Pipeline def cards on the list page link to their detail page."""
+    def_id = await _seed_pipeline_def(name="linked-def")
+    resp = await client.get("/pipeline-defs")
+    assert f"/pipeline-defs/{def_id}" in resp.text
+
+
+# ---------------------------------------------------------------------------
+# Detail page — minimal single-node def
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_detail_minimal_def(client):
+    """Detail page renders correctly for a single-node, zero-edge def."""
+    def_id = await _seed_pipeline_def(name="minimal-def")
+    resp = await client.get(f"/pipeline-defs/{def_id}")
+    assert resp.status_code == 200
+    assert "minimal-def" in resp.text
+    assert "Spec" in resp.text  # node name from _seed_pipeline_def
+
+
+# ---------------------------------------------------------------------------
+# Detail page — property-based
+# ---------------------------------------------------------------------------
+
+
+@hyp_settings(
+    max_examples=10,
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
+)
+@given(
+    name=st.from_regex(r"def-[a-z0-9]{4,12}", fullmatch=True),
+)
+@pytest.mark.asyncio
+async def test_detail_always_returns_200_for_existing(client, name):
+    """Detail page always returns 200 for any existing pipeline def."""
+    unique_name = f"{name}-{uuid.uuid4().hex[:6]}"
+    def_id = await _seed_pipeline_def(name=unique_name)
+    resp = await client.get(f"/pipeline-defs/{def_id}")
+    assert resp.status_code == 200
+    assert unique_name in resp.text
+
+
+# ---------------------------------------------------------------------------
+# Preview endpoint (GET /pipeline-defs/{id}/preview)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_preview_returns_stage_summary(client):
+    """GET /pipeline-defs/{id}/preview returns an HTML fragment with stage info.
+
+    Invariant: the preview contains the stage name and type from the definition.
+    """
+    def_id = await _seed_pipeline_def(name=f"prev-{uuid.uuid4().hex[:6]}")
+    resp = await client.get(f"/pipeline-defs/{def_id}/preview")
+    assert resp.status_code == 200
+    assert "def-preview" in resp.text
+    assert "Spec" in resp.text
+    assert "spec_author" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_preview_shows_stage_count(client):
+    """GET /pipeline-defs/{id}/preview header shows the node and edge counts.
+
+    Invariant: a single-node definition shows '1 stage, 0 transitions'.
+    """
+    def_id = await _seed_pipeline_def(name=f"cnt-{uuid.uuid4().hex[:6]}")
+    resp = await client.get(f"/pipeline-defs/{def_id}/preview")
+    assert resp.status_code == 200
+    assert "1 stage" in resp.text
+    assert "0 transitions" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_preview_nonexistent_returns_empty(client):
+    """GET /pipeline-defs/99999/preview returns empty HTML for missing definitions.
+
+    Invariant: status 200 with empty body, not a 404.
+    """
+    resp = await client.get("/pipeline-defs/99999/preview")
+    assert resp.status_code == 200
+    assert resp.text.strip() == ""
+
+
+@pytest.mark.asyncio
+async def test_preview_shows_edges(client):
+    """GET /pipeline-defs/{id}/preview includes edge info when edges exist.
+
+    Invariant: edge from/to and condition appear in the preview HTML.
+    """
+    pool = get_pool()
+    graph = json.dumps({
+        "entry_stage": "a",
+        "nodes": [
+            {"key": "a", "name": "Step A", "type": "spec_author", "agent": "claude",
+             "prompt": "p", "model": "claude-sonnet-4-6", "max_iterations": 1},
+            {"key": "b", "name": "Step B", "type": "impl_plan", "agent": "claude",
+             "prompt": "p", "model": "claude-sonnet-4-6", "max_iterations": 1},
+        ],
+        "edges": [{"key": "e1", "from": "a", "to": "b", "on": "approved"}],
+    })
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            "INSERT INTO pipeline_defs (name, stage_graph_json) VALUES (%s, %s) RETURNING id",
+            (f"edge-{uuid.uuid4().hex[:6]}", graph),
+        )
+        row = await cur.fetchone()
+        assert row is not None
+        await conn.commit()
+    def_id = row["id"]
+
+    resp = await client.get(f"/pipeline-defs/{def_id}/preview")
+    assert resp.status_code == 200
+    assert "Step A" in resp.text
+    assert "Step B" in resp.text
+    assert "def-preview-edge" in resp.text
+    assert "approved" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_preview_marks_entry_stage(client):
+    """GET /pipeline-defs/{id}/preview labels the entry stage.
+
+    Invariant: the entry stage node has '(entry)' in its type label.
+    """
+    def_id = await _seed_pipeline_def(name=f"ent-{uuid.uuid4().hex[:6]}")
+    resp = await client.get(f"/pipeline-defs/{def_id}/preview")
+    assert resp.status_code == 200
+    assert "(entry)" in resp.text

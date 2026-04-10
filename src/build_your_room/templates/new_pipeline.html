@@ -14,7 +14,10 @@
         <select name="repo_id" required>
             <option value="">Select a repo...</option>
             {% for repo in repos %}
-            <option value="{{ repo['id'] }}">{{ repo.name }} ({{ repo.local_path }})</option>
+            <option value="{{ repo['id'] }}"
+                {% if selected_repo_id and selected_repo_id == repo['id'] %}selected{% endif %}>
+                {{ repo.name }} ({{ repo.local_path }})
+            </option>
             {% endfor %}
         </select>
         {% else %}
@@ -24,8 +27,11 @@
 
     <label>
         <span class="field-label">Pipeline Definition</span>
+        <span class="field-hint">Choose what work this pipeline will do</span>
         {% if pipeline_defs %}
-        <select name="pipeline_def_id" required>
+        <select name="pipeline_def_id" id="def-selector" required
+                hx-get="" hx-target="#def-preview" hx-swap="innerHTML"
+                hx-trigger="change">
             <option value="">Select a definition...</option>
             {% for d in pipeline_defs %}
             <option value="{{ d['id'] }}">{{ d.name }}</option>
@@ -36,6 +42,8 @@
         {% endif %}
     </label>
 
+    <div id="def-preview" class="def-preview-container"></div>
+
     <div class="builder-actions">
         <button type="submit" class="btn-create"
                 {% if not repos or not pipeline_defs %}disabled{% endif %}>
@@ -44,4 +52,23 @@
         <a href="/" class="btn-cancel">Cancel</a>
     </div>
 </form>
+
+{% if pipeline_defs %}
+<script>
+(function() {
+    var sel = document.getElementById('def-selector');
+    sel.addEventListener('change', function() {
+        var id = sel.value;
+        if (id) {
+            sel.setAttribute('hx-get', '/pipeline-defs/' + id + '/preview');
+        } else {
+            var preview = document.getElementById('def-preview');
+            while (preview.firstChild) preview.removeChild(preview.firstChild);
+            sel.setAttribute('hx-get', '');
+        }
+        if (window.htmx) { htmx.process(sel); }
+    });
+})();
+</script>
+{% endif %}
 {% endblock %}

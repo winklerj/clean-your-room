@@ -11,8 +11,21 @@
 
     <label>
         <span class="field-label">Local Path</span>
-        <input type="text" name="local_path" required placeholder="/home/user/projects/my-project">
+        <div class="browse-input-row">
+            <input type="text" name="local_path" id="local-path-input" required
+                   placeholder="/home/user/projects/my-project">
+            <button type="button" class="btn-browse" id="browse-toggle">Browse</button>
+        </div>
     </label>
+
+    <div id="folder-picker" class="folder-picker" style="display:none;">
+        <div id="folder-list" class="folder-list"
+             hx-get="/repos/browse" hx-trigger="load" hx-target="#folder-list">
+        </div>
+        <div class="folder-picker-actions">
+            <button type="button" class="btn-select-folder" id="select-folder">Select This Folder</button>
+        </div>
+    </div>
 
     <label>
         <span class="field-label">Git URL (optional)</span>
@@ -29,4 +42,38 @@
         <a href="/repos" class="btn-cancel">Cancel</a>
     </div>
 </form>
+
+<script>
+(function() {
+    const toggle = document.getElementById('browse-toggle');
+    const picker = document.getElementById('folder-picker');
+    const input = document.getElementById('local-path-input');
+    const selectBtn = document.getElementById('select-folder');
+
+    toggle.addEventListener('click', function() {
+        const open = picker.style.display !== 'none';
+        picker.style.display = open ? 'none' : 'block';
+        toggle.textContent = open ? 'Browse' : 'Close';
+    });
+
+    selectBtn.addEventListener('click', function() {
+        const current = picker.querySelector('.browse-current');
+        if (current) {
+            input.value = current.textContent;
+        }
+        picker.style.display = 'none';
+        toggle.textContent = 'Browse';
+    });
+
+    // Double-click a folder entry to select it immediately
+    document.getElementById('folder-list').addEventListener('dblclick', function(e) {
+        const entry = e.target.closest('.browse-entry:not(.browse-parent)');
+        if (entry && entry.dataset.path) {
+            input.value = entry.dataset.path;
+            picker.style.display = 'none';
+            toggle.textContent = 'Browse';
+        }
+    });
+})();
+</script>
 {% endblock %}

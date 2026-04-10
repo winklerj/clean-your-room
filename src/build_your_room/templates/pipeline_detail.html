@@ -15,6 +15,18 @@
 </div>
 
 {# ---- Lifecycle actions ---- #}
+{% if pipeline.status == 'pending' %}
+<div class="pipeline-pending-banner">
+    <div class="pending-banner-text">
+        <strong>Starting up</strong> &mdash; the orchestrator is cloning the repo and preparing the first stage.
+        This page will update automatically once the pipeline begins running.
+    </div>
+    <form method="post" action="/pipelines/{{ pipeline.id }}/cancel" class="inline-form"
+          onsubmit="return confirm('Cancel this pending pipeline?')">
+        <button type="submit" class="btn-action btn-action-cancel">Cancel</button>
+    </form>
+</div>
+{% endif %}
 <div class="pipeline-actions">
     {% if pipeline.status == 'running' %}
     <form method="post" action="/pipelines/{{ pipeline.id }}/cancel" class="inline-form"
@@ -45,11 +57,6 @@
     <form method="post" action="/pipelines/{{ pipeline.id }}/kill" class="inline-form"
           onsubmit="return confirm('Force kill this pipeline?')">
         <button type="submit" class="btn-action btn-action-kill">Force Kill</button>
-    </form>
-    {% elif pipeline.status == 'pending' %}
-    <form method="post" action="/pipelines/{{ pipeline.id }}/cancel" class="inline-form"
-          onsubmit="return confirm('Cancel this pending pipeline?')">
-        <button type="submit" class="btn-action btn-action-cancel">Cancel</button>
     </form>
     {% endif %}
 </div>
