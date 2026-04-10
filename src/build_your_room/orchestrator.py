@@ -9,8 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +21,7 @@ from build_your_room.config import (
     PIPELINE_LEASE_TTL_SEC,
     PIPELINES_DIR,
 )
+from build_your_room.lease_manager import LeaseManager
 from build_your_room.stage_graph import StageGraph
 from build_your_room.stages.code_review import run_code_review_stage
 from build_your_room.stages.impl_plan import run_impl_plan_stage
@@ -66,6 +66,7 @@ class PipelineOrchestrator:
         lease_ttl_sec: int = PIPELINE_LEASE_TTL_SEC,
         heartbeat_interval_sec: int = PIPELINE_HEARTBEAT_INTERVAL_SEC,
         adapters: dict[str, AgentAdapter] | None = None,
+        lease_manager: LeaseManager | None = None,
     ) -> None:
         self._pool = pool
         self._log_buffer = log_buffer
@@ -73,6 +74,11 @@ class PipelineOrchestrator:
         self._lease_ttl_sec = lease_ttl_sec
         self._heartbeat_interval_sec = heartbeat_interval_sec
         self._adapters: dict[str, AgentAdapter] = adapters or {}
+        self._lease_manager = lease_manager or LeaseManager(
+            pool,
+            lease_ttl_sec=lease_ttl_sec,
+            heartbeat_interval_sec=heartbeat_interval_sec,
+        )
         self._active_pipelines: dict[int, tuple[asyncio.Task, asyncio.Event]] = {}  # type: ignore[type-arg]
 
     # ------------------------------------------------------------------
@@ -270,10 +276,10 @@ class PipelineOrchestrator:
 
     async def _run_pipeline(self, pipeline_id: int, cancel_event: asyncio.Event) -> None:
         """Main loop: acquire lease, walk the stage graph, handle transitions."""
-        owner_token = await self._acquire_pipeline_lease(pipeline_id)
+        owner_token = await self._lease_manager.acquire_pipeline_lease(pipeline_id)
 
         heartbeat_task = asyncio.create_task(
-            self._heartbeat_loop(pipeline_id, owner_token, cancel_event),
+            self._lease_manager.heartbeat_loop(pipeline_id, owner_token, cancel_event),
             name=f"heartbeat-{pipeline_id}",
         )
 
@@ -381,7 +387,7 @@ class PipelineOrchestrator:
                 await heartbeat_task
             except asyncio.CancelledError:
                 pass
-            await self._release_pipeline_lease(pipeline_id)
+            await self._lease_manager.release_pipeline_lease(pipeline_id)
 
     async def _run_stage(
         self,
@@ -545,46 +551,16 @@ class PipelineOrchestrator:
         return mapping.get(stage_type, STAGE_RESULT_APPROVED)
 
     # ------------------------------------------------------------------
-    # Lease management
+    # Lease management (delegated to LeaseManager)
     # ------------------------------------------------------------------
 
     async def _acquire_pipeline_lease(self, pipeline_id: int) -> str:
         """Atomically acquire the pipeline lease. Returns the owner_token."""
-        owner_token = str(uuid.uuid4())
-        now = _utc_now()
-        expires = now + timedelta(seconds=self._lease_ttl_sec)
-
-        async with self._pool.connection() as conn:
-            result: dict[str, Any] | None = await (  # type: ignore[assignment]
-                await conn.execute(
-                    "UPDATE pipelines SET owner_token = %s, last_heartbeat_at = %s, "
-                    "lease_expires_at = %s, updated_at = now() "
-                    "WHERE id = %s AND (owner_token IS NULL OR lease_expires_at < %s) "
-                    "RETURNING id",
-                    (owner_token, now, expires, pipeline_id, now),
-                )
-            ).fetchone()
-            await conn.commit()
-
-        if not result:
-            raise RuntimeError(
-                f"Failed to acquire lease for pipeline {pipeline_id} — "
-                "another owner holds an active lease"
-            )
-
-        logger.info("Acquired lease for pipeline %d (token=%s)", pipeline_id, owner_token[:8])
-        return owner_token
+        return await self._lease_manager.acquire_pipeline_lease(pipeline_id)
 
     async def _release_pipeline_lease(self, pipeline_id: int) -> None:
         """Release the pipeline lease."""
-        async with self._pool.connection() as conn:
-            await conn.execute(
-                "UPDATE pipelines SET owner_token = NULL, "
-                "lease_expires_at = NULL, updated_at = now() "
-                "WHERE id = %s",
-                (pipeline_id,),
-            )
-            await conn.commit()
+        await self._lease_manager.release_pipeline_lease(pipeline_id)
 
     async def _heartbeat_loop(
         self,
@@ -593,36 +569,7 @@ class PipelineOrchestrator:
         cancel_event: asyncio.Event,
     ) -> None:
         """Periodically renew the pipeline lease until cancelled."""
-        while not cancel_event.is_set():
-            try:
-                await asyncio.sleep(self._heartbeat_interval_sec)
-            except asyncio.CancelledError:
-                return
-
-            if cancel_event.is_set():
-                return
-
-            now = _utc_now()
-            expires = now + timedelta(seconds=self._lease_ttl_sec)
-
-            async with self._pool.connection() as conn:
-                hb_result: dict[str, Any] | None = await (  # type: ignore[assignment]
-                    await conn.execute(
-                        "UPDATE pipelines SET last_heartbeat_at = %s, "
-                        "lease_expires_at = %s, updated_at = now() "
-                        "WHERE id = %s AND owner_token = %s "
-                        "RETURNING id",
-                        (now, expires, pipeline_id, owner_token),
-                    )
-                ).fetchone()
-                await conn.commit()
-
-            if not hb_result:
-                logger.error(
-                    "Heartbeat failed for pipeline %d — lease lost", pipeline_id
-                )
-                cancel_event.set()
-                return
+        await self._lease_manager.heartbeat_loop(pipeline_id, owner_token, cancel_event)
 
     async def renew_leases(
         self,
@@ -633,29 +580,9 @@ class PipelineOrchestrator:
         """Renew leases for pipeline and optionally stage/session.
 
         Called by stage runners during long-running operations.
+        Delegates to the LeaseManager.
         """
-        now = _utc_now()
-        expires = now + timedelta(seconds=self._lease_ttl_sec)
-
-        async with self._pool.connection() as conn:
-            await conn.execute(
-                "UPDATE pipelines SET last_heartbeat_at = %s, "
-                "lease_expires_at = %s, updated_at = now() WHERE id = %s",
-                (now, expires, pipeline_id),
-            )
-            if stage_id is not None:
-                await conn.execute(
-                    "UPDATE pipeline_stages SET last_heartbeat_at = %s, "
-                    "lease_expires_at = %s WHERE id = %s",
-                    (now, expires, stage_id),
-                )
-            if session_id is not None:
-                await conn.execute(
-                    "UPDATE agent_sessions SET last_heartbeat_at = %s, "
-                    "lease_expires_at = %s WHERE id = %s",
-                    (now, expires, session_id),
-                )
-            await conn.commit()
+        await self._lease_manager.renew_leases(pipeline_id, stage_id, session_id)
 
     # ------------------------------------------------------------------
     # Workspace management

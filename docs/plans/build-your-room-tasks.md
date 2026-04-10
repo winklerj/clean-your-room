@@ -55,3 +55,8 @@ Tracking progress on the build-your-room spec implementation plan.
 - [x] 34. Repo management page — GET /repos dedicated repo list with pipeline counts/status per repo, latest pipeline info, show/hide archived filter, enriched repo detail with pipeline history table and "New Pipeline" links, Repos nav link, 16 new tests (996 total)
 - [x] 35. HTN task tree standalone page — GET /pipelines/{id}/tasks with status/type filters, ancestor-preserving filter, progress bar, filter chips, View full tree link from pipeline detail, 15 new tests (1011 total)
 - [x] 36. Stage detail HTMX partial — GET /pipelines/{id}/stages/{stage_id} with per-session logs, output artifact content rendering, review feedback history, context usage bars, HTMX tab click in pipeline detail, partials/stage_detail.html, 20 new tests (1031 total)
+
+## Phase 7: Architecture Alignment (spec-mandated module extractions)
+
+- [x] 37. Extract lease management into lease_manager.py — LeaseManager class with multi-level acquire/release/renew for pipelines/stages/sessions, heartbeat_loop, expiry queries (is_lease_expired, get_expired_running_pipelines, get_live_running_pipelines), release_all_for_pipeline bulk cleanup, LeaseError exception, orchestrator delegated to LeaseManager, 32 new tests (1063 total)
+- [ ] 38. Extract recovery into recovery.py — Startup reconciliation + restart recovery, dirty workspace snapshot/reset, recovery from recovery_state_json

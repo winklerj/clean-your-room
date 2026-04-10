@@ -12,7 +12,7 @@
 ## Common Commands
 ```bash
 uv sync --extra dev                             # Install dependencies
-uv run pytest tests/ -v                         # Run all tests (876 tests)
+uv run pytest tests/ -v                         # Run all tests (1063 tests)
 uv run ruff check src/ tests/                   # Lint
 uv run mypy src/ --ignore-missing-imports       # Type check
 uv run uvicorn build_your_room.main:app --reload --port 8317  # Run dev server
@@ -46,7 +46,8 @@ uv run uvicorn build_your_room.main:app --reload --port 8317  # Run dev server
 ## Architecture
 
 ### Core components
-- **PipelineOrchestrator** (`orchestrator.py`) — stage graph dispatch, durable leases, heartbeat, dirty-workspace recovery, startup reconciliation, escalation queue
+- **PipelineOrchestrator** (`orchestrator.py`) — stage graph dispatch, dirty-workspace recovery, startup reconciliation, escalation queue
+- **LeaseManager** (`lease_manager.py`) — durable lease/heartbeat ownership for pipelines, stages, sessions; expiry queries for recovery
 - **StageGraph** (`stage_graph.py`) — frozen dataclass nodes/edges, JSON parsing, edge resolution with visit-count tracking
 - **HTNPlanner** (`htn_planner.py`) — task graph CRUD, atomic claims (CTE WITH FOR UPDATE SKIP LOCKED), readiness propagation, postcondition verification
 - **ContextMonitor** (`context_monitor.py`) — usage tracking, rotation decisions (CONTINUE vs ROTATE)
