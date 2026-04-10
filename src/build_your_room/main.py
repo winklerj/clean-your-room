@@ -1,22 +1,54 @@
+import logging
 from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pathlib import Path
 
-from build_your_room.config import BUILD_YOUR_ROOM_DIR, DATABASE_URL
-from build_your_room.db import init_db, close_pool
+from build_your_room.config import (
+    BUILD_YOUR_ROOM_DIR,
+    CLONES_DIR,
+    DATABASE_URL,
+    LOG_LEVEL,
+    MAX_CONCURRENT_PIPELINES,
+    PIPELINES_DIR,
+)
+from build_your_room.db import close_pool, get_pool, init_db
+from build_your_room.orchestrator import PipelineOrchestrator
 from build_your_room.routes.dashboard import router as dashboard_router
 from build_your_room.routes.prompts import router as prompts_router
 from build_your_room.routes.repos import router as repos_router
+from build_your_room.streaming import LogBuffer
+
+logger = logging.getLogger(__name__)
+log_buffer = LogBuffer()
+orchestrator: PipelineOrchestrator | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global orchestrator
+
+    logging.basicConfig(level=getattr(logging, LOG_LEVEL, logging.INFO))
+
     BUILD_YOUR_ROOM_DIR.mkdir(parents=True, exist_ok=True)
+    CLONES_DIR.mkdir(parents=True, exist_ok=True)
+    PIPELINES_DIR.mkdir(parents=True, exist_ok=True)
+
     await init_db(DATABASE_URL)
+
+    pool = get_pool()
+    orchestrator = PipelineOrchestrator(
+        pool, log_buffer, max_concurrent=MAX_CONCURRENT_PIPELINES
+    )
+    await orchestrator.reconcile_running_state()
+    logger.info("Orchestrator initialized, startup reconciliation complete")
+
     yield
+
     await close_pool()
+    orchestrator = None
 
 
 app = FastAPI(lifespan=lifespan)
