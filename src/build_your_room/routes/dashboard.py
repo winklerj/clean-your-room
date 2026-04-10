@@ -129,6 +129,10 @@ async def _fetch_dashboard_data() -> dict[str, Any]:
         s = p["status"]
         status_counts[s] = status_counts.get(s, 0) + 1
 
+    terminal_count = sum(
+        1 for p in pipelines if p["status"] in _TERMINAL_STATUSES
+    )
+
     return {
         "pipelines": enriched,
         "repos": repos,
@@ -136,6 +140,7 @@ async def _fetch_dashboard_data() -> dict[str, Any]:
         "status_counts": status_counts,
         "total_pipelines": len(pipelines),
         "total_repos": len(repos),
+        "terminal_count": terminal_count,
     }
 
 

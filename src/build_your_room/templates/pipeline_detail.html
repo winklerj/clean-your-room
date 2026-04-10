@@ -213,11 +213,12 @@
 
     {% if is_terminal %}
     <div class="clone-actions">
-        <button class="btn-cleanup"
-                hx-post="/pipelines/{{ pipeline.id }}/cleanup"
-                hx-confirm="Delete clone for this pipeline?">
-            Clean up clone
-        </button>
+        <form method="post" action="/pipelines/{{ pipeline.id }}/cleanup"
+              onsubmit="return confirm('Delete clone for this pipeline?')">
+            <button type="submit" class="btn-cleanup">
+                Clean up clone
+            </button>
+        </form>
     </div>
     {% endif %}
 </div>

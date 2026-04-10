@@ -109,6 +109,11 @@ input[type="text"], input[type="url"], input[type="number"] { width: 100%; paddi
 .btn-cleanup { font-size: 0.75em; padding: 0.2rem 0.5rem; border: 1px solid #ccc; border-radius: 3px; background: #fff; cursor: pointer; color: #666; }
 .btn-cleanup:hover { background: #f5f5f5; border-color: #999; color: #333; }
 
+.pipelines-header { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.pipelines-header h2 { margin: 0; }
+.btn-cleanup-bulk { font-size: 0.85em; padding: 0.35rem 0.75rem; border: 1px solid #d4a017; border-radius: 4px; background: #fff8e1; cursor: pointer; color: #8b6914; font-weight: 500; }
+.btn-cleanup-bulk:hover { background: #ffecb3; border-color: #c49000; color: #6d5200; }
+
 /* Status badges — extended for new pipeline statuses */
 .status-needs_attention { background: #fff3cd; color: #856404; }
 .status-paused { background: #e2e3e5; color: #383d41; }

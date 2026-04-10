@@ -35,7 +35,17 @@
 </div>
 
 {% if pipelines %}
-<h2>Pipelines</h2>
+<div class="pipelines-header">
+    <h2>Pipelines</h2>
+    {% if terminal_count > 0 %}
+    <form method="post" action="/pipelines/cleanup-completed"
+          onsubmit="return confirm('Delete clones for all {{ terminal_count }} completed/cancelled/killed pipelines?')">
+        <button type="submit" class="btn-cleanup-bulk">
+            Clean all completed ({{ terminal_count }})
+        </button>
+    </form>
+    {% endif %}
+</div>
 <div class="pipeline-cards-grid">
     {% for pipeline in pipelines %}
     {% include "partials/pipeline_card.html" %}

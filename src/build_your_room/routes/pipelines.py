@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import json
+import shutil
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 from build_your_room.db import get_pool
 
@@ -276,3 +278,140 @@ async def pipeline_logs_partial(request: Request, pipeline_id: int):
         "request": request,
         "logs": logs,
     })
+
+
+async def _fetch_pipeline_card_data(
+    pipeline_id: int,
+) -> dict[str, Any] | None:
+    """Fetch enriched pipeline data suitable for rendering a single card partial."""
+    pool = get_pool()
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            "SELECT p.*, r.name AS repo_name, pd.name AS def_name "
+            "FROM pipelines p "
+            "JOIN repos r ON r.id = p.repo_id "
+            "JOIN pipeline_defs pd ON pd.id = p.pipeline_def_id "
+            "WHERE p.id = %s",
+            (pipeline_id,),
+        )
+        pipeline: dict[str, Any] | None = await cur.fetchone()  # type: ignore[assignment]
+        if pipeline is None:
+            return None
+
+        # Latest stage
+        cur = await conn.execute(
+            "SELECT stage_key, stage_type, status, iteration, max_iterations "
+            "FROM pipeline_stages WHERE pipeline_id = %s "
+            "ORDER BY attempt DESC, id DESC LIMIT 1",
+            (pipeline_id,),
+        )
+        stage: dict[str, Any] | None = await cur.fetchone()  # type: ignore[assignment]
+
+        # HTN progress
+        cur = await conn.execute(
+            "SELECT status, COUNT(*) AS cnt FROM htn_tasks "
+            "WHERE pipeline_id = %s AND task_type = 'primitive' GROUP BY status",
+            (pipeline_id,),
+        )
+        htn_rows: list[dict[str, Any]] = await cur.fetchall()  # type: ignore[assignment]
+        htn: dict[str, int] = {r["status"]: r["cnt"] for r in htn_rows}
+        htn_total = sum(htn.values())
+        htn_completed = htn.get("completed", 0)
+
+        # Cost
+        cur = await conn.execute(
+            "SELECT COALESCE(SUM(s.cost_usd), 0) AS total_cost "
+            "FROM agent_sessions s "
+            "JOIN pipeline_stages ps ON ps.id = s.pipeline_stage_id "
+            "WHERE ps.pipeline_id = %s",
+            (pipeline_id,),
+        )
+        cost_row: dict[str, Any] | None = await cur.fetchone()  # type: ignore[assignment]
+        total_cost = float(cost_row["total_cost"]) if cost_row else 0.0
+
+        # Context usage (latest running session)
+        cur = await conn.execute(
+            "SELECT s.context_usage_pct FROM agent_sessions s "
+            "JOIN pipeline_stages ps ON ps.id = s.pipeline_stage_id "
+            "WHERE ps.pipeline_id = %s AND s.status = 'running' "
+            "ORDER BY s.started_at DESC LIMIT 1",
+            (pipeline_id,),
+        )
+        ctx_row: dict[str, Any] | None = await cur.fetchone()  # type: ignore[assignment]
+
+    return {
+        **pipeline,
+        "def_name": pipeline["def_name"],
+        "stage": stage,
+        "htn_total": htn_total,
+        "htn_completed": htn_completed,
+        "htn_in_progress": htn.get("in_progress", 0),
+        "htn_ready": htn.get("ready", 0),
+        "htn_failed": htn.get("failed", 0),
+        "htn_blocked": htn.get("blocked", 0),
+        "htn_pct": round(htn_completed / htn_total * 100) if htn_total else 0,
+        "context_usage_pct": ctx_row["context_usage_pct"] if ctx_row else None,
+        "total_cost": total_cost,
+        "is_terminal": pipeline["status"] in _TERMINAL_STATUSES,
+    }
+
+
+@router.post("/pipelines/{pipeline_id}/cleanup")
+async def cleanup_pipeline_clone(request: Request, pipeline_id: int):
+    """Delete a pipeline's clone directory. Returns updated card partial for HTMX."""
+    from build_your_room.main import templates
+
+    pool = get_pool()
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            "SELECT id, status, clone_path FROM pipelines WHERE id = %s",
+            (pipeline_id,),
+        )
+        row: dict[str, Any] | None = await cur.fetchone()  # type: ignore[assignment]
+
+    if row is None:
+        return HTMLResponse("<p>Pipeline not found</p>", status_code=404)
+
+    if row["status"] not in _TERMINAL_STATUSES:
+        return HTMLResponse(
+            "<p>Cannot clean up a pipeline that is still active</p>",
+            status_code=409,
+        )
+
+    # Delete clone directory if it exists
+    clone_path = Path(row["clone_path"]) if row["clone_path"] else None
+    if clone_path and clone_path.exists():
+        shutil.rmtree(clone_path)
+
+    # Check if this is an HTMX request (card swap) or a full-page request (redirect)
+    is_htmx = request.headers.get("HX-Request") == "true"
+    if is_htmx:
+        card_data = await _fetch_pipeline_card_data(pipeline_id)
+        if card_data is None:
+            return HTMLResponse("<p>Pipeline not found</p>", status_code=404)
+        return templates.TemplateResponse("partials/pipeline_card.html", {
+            "request": request,
+            "pipeline": card_data,
+        })
+
+    return RedirectResponse(url=f"/pipelines/{pipeline_id}", status_code=303)
+
+
+@router.post("/pipelines/cleanup-completed")
+async def cleanup_completed_clones():
+    """Bulk cleanup clones for all completed/cancelled/killed pipelines."""
+    pool = get_pool()
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            "SELECT id, clone_path FROM pipelines "
+            "WHERE status IN ('completed', 'cancelled', 'killed') "
+            "AND clone_path IS NOT NULL"
+        )
+        rows: list[dict[str, Any]] = await cur.fetchall()  # type: ignore[assignment]
+
+    for row in rows:
+        clone_path = Path(row["clone_path"])
+        if clone_path.exists():
+            shutil.rmtree(clone_path)
+
+    return RedirectResponse(url="/", status_code=303)
