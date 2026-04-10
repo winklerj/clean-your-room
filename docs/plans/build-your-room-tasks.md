@@ -41,7 +41,7 @@ Tracking progress on the build-your-room spec implementation plan.
 ## Phase 5: Polish + validation
 
 - [x] 25. Property-based tests for orchestrator state machine, stage-transition guards, and HTN claims (Hypothesis)
-- [ ] 26. Integration tests with mock adapters + `pytest-postgresql`
+- [x] 26. Integration tests with mock adapters + `pytest-postgresql`
 - [ ] 27. Devbrowser recording integration in validation stage
 - [ ] 28. Documentation (README, CLAUDE.md, AGENTS.md)
 - [ ] 29. Default prompt templates for all stage types
