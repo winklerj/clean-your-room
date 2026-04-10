@@ -779,3 +779,223 @@ async def test_status_filter_consistency(initialized_db, status):
         assert resp_default.status_code == 200
         if status == "open":
             assert "escalation-card" in resp_default.text
+
+
+# ---------------------------------------------------------------------------
+# Tests — pause/kill pipeline action buttons on escalation cards
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_escalation_card_shows_pause_kill_for_running_pipeline(client):
+    """Open escalation for a running pipeline shows Pause and Kill buttons.
+
+    Invariant: when the associated pipeline is running, both pause and kill
+    pipeline action buttons are present on the escalation card.
+    """
+    repo_id = await _seed_repo()
+    def_id = await _seed_pipeline_def()
+    pid = await _seed_pipeline(repo_id, def_id, status="running")
+    stage_id = await _seed_stage(pid)
+    await _seed_escalation(pid, stage_id=stage_id)
+
+    resp = await client.get("/escalations")
+    assert resp.status_code == 200
+    assert "btn-action-pause" in resp.text
+    assert "Pause Pipeline" in resp.text
+    assert "btn-action-kill" in resp.text
+    assert "Kill Pipeline" in resp.text
+    assert f"/pipelines/{pid}/pause" in resp.text
+    assert f"/pipelines/{pid}/kill" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_escalation_card_shows_kill_only_for_paused_pipeline(client):
+    """Open escalation for a paused pipeline shows Kill but not Pause.
+
+    Invariant: a paused pipeline can be killed but pausing again is a no-op,
+    so only the Kill button appears.
+    """
+    repo_id = await _seed_repo()
+    def_id = await _seed_pipeline_def()
+    pid = await _seed_pipeline(repo_id, def_id, status="paused")
+    stage_id = await _seed_stage(pid)
+    await _seed_escalation(pid, stage_id=stage_id)
+
+    resp = await client.get("/escalations")
+    assert resp.status_code == 200
+    assert "btn-action-pause" not in resp.text
+    assert "btn-action-kill" in resp.text
+    assert "Kill Pipeline" in resp.text
+    assert f"/pipelines/{pid}/kill" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_escalation_card_shows_kill_for_needs_attention_pipeline(client):
+    """Open escalation for a needs_attention pipeline shows Kill but not Pause.
+
+    Invariant: a pipeline that needs attention can be killed to abort the run.
+    """
+    repo_id = await _seed_repo()
+    def_id = await _seed_pipeline_def()
+    pid = await _seed_pipeline(repo_id, def_id, status="needs_attention")
+    stage_id = await _seed_stage(pid)
+    await _seed_escalation(pid, stage_id=stage_id)
+
+    resp = await client.get("/escalations")
+    assert resp.status_code == 200
+    assert "btn-action-pause" not in resp.text
+    assert "btn-action-kill" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_escalation_card_shows_kill_for_cancel_requested_pipeline(client):
+    """Open escalation for a cancel_requested pipeline shows Kill.
+
+    Invariant: a pipeline awaiting graceful cancel can be force-killed.
+    """
+    repo_id = await _seed_repo()
+    def_id = await _seed_pipeline_def()
+    pid = await _seed_pipeline(repo_id, def_id, status="cancel_requested")
+    stage_id = await _seed_stage(pid)
+    await _seed_escalation(pid, stage_id=stage_id)
+
+    resp = await client.get("/escalations")
+    assert resp.status_code == 200
+    assert "btn-action-pause" not in resp.text
+    assert "btn-action-kill" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_escalation_card_no_pipeline_actions_for_terminal_status(client):
+    """Open escalation for a completed pipeline shows no pause/kill buttons.
+
+    Invariant: terminal pipeline states (completed, cancelled, killed, failed)
+    do not show lifecycle action buttons since no action is meaningful.
+    """
+    repo_id = await _seed_repo()
+    def_id = await _seed_pipeline_def()
+    pid = await _seed_pipeline(repo_id, def_id, status="completed")
+    stage_id = await _seed_stage(pid)
+    await _seed_escalation(pid, stage_id=stage_id)
+
+    resp = await client.get("/escalations")
+    assert resp.status_code == 200
+    assert "btn-action-pause" not in resp.text
+    assert "btn-action-kill" not in resp.text
+
+
+@pytest.mark.asyncio
+async def test_escalation_card_no_pipeline_actions_for_pending_status(client):
+    """Open escalation for a pending pipeline shows no pause/kill buttons.
+
+    Invariant: a pending pipeline has not started, so pause/kill are not offered.
+    """
+    repo_id = await _seed_repo()
+    def_id = await _seed_pipeline_def()
+    pid = await _seed_pipeline(repo_id, def_id, status="pending")
+    stage_id = await _seed_stage(pid)
+    await _seed_escalation(pid, stage_id=stage_id)
+
+    resp = await client.get("/escalations")
+    assert resp.status_code == 200
+    assert "btn-action-pause" not in resp.text
+    assert "btn-action-kill" not in resp.text
+
+
+@pytest.mark.asyncio
+async def test_resolved_escalation_no_pipeline_actions(client):
+    """Resolved escalations show no pipeline action buttons.
+
+    Invariant: only open escalations display any action buttons including
+    pipeline lifecycle controls.
+    """
+    repo_id = await _seed_repo()
+    def_id = await _seed_pipeline_def()
+    pid = await _seed_pipeline(repo_id, def_id, status="running")
+    stage_id = await _seed_stage(pid)
+    await _seed_escalation(pid, stage_id=stage_id, status="resolved")
+
+    resp = await client.get("/escalations?show_all=1")
+    assert resp.status_code == 200
+    assert "escalation-card" in resp.text
+    assert "btn-action-pause" not in resp.text
+    assert "btn-action-kill" not in resp.text
+
+
+@hyp_settings(max_examples=15, deadline=None,
+              suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(
+    pipeline_status=st.sampled_from([
+        "running", "paused", "needs_attention", "cancel_requested",
+        "completed", "cancelled", "killed", "failed", "pending",
+    ]),
+)
+@pytest.mark.asyncio
+async def test_pause_button_only_for_running_pipeline(initialized_db, pipeline_status):
+    """Property: the Pause Pipeline button appears only when the pipeline is running.
+
+    Invariant: for all pipeline statuses, the pause action URL for this specific
+    pipeline is present iff the pipeline status is 'running'.
+    """
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        uid = uuid.uuid4().hex[:12]
+        repo_id = await _seed_repo(
+            name=f"pa-{uid}", local_path=f"/tmp/pa-{uid}"
+        )
+        def_id = await _seed_pipeline_def(name=f"pa-def-{uid}")
+        pid = await _seed_pipeline(
+            repo_id, def_id, status=pipeline_status,
+            clone_path=f"/tmp/pa-c-{uid}",
+        )
+        stage_id = await _seed_stage(pid)
+        await _seed_escalation(pid, stage_id=stage_id)
+
+        resp = await c.get("/escalations")
+        assert resp.status_code == 200
+        pause_url = f"/pipelines/{pid}/pause"
+        if pipeline_status == "running":
+            assert pause_url in resp.text
+        else:
+            assert pause_url not in resp.text
+
+
+@hyp_settings(max_examples=15, deadline=None,
+              suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(
+    pipeline_status=st.sampled_from([
+        "running", "paused", "needs_attention", "cancel_requested",
+        "completed", "cancelled", "killed", "failed", "pending",
+    ]),
+)
+@pytest.mark.asyncio
+async def test_kill_button_only_for_active_pipeline(initialized_db, pipeline_status):
+    """Property: the Kill Pipeline button appears only for active pipeline states.
+
+    Invariant: for all pipeline statuses, the kill action URL for this specific
+    pipeline is present iff the pipeline status is in
+    {running, paused, needs_attention, cancel_requested}.
+    """
+    killable = {"running", "paused", "needs_attention", "cancel_requested"}
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        uid = uuid.uuid4().hex[:12]
+        repo_id = await _seed_repo(
+            name=f"ka-{uid}", local_path=f"/tmp/ka-{uid}"
+        )
+        def_id = await _seed_pipeline_def(name=f"ka-def-{uid}")
+        pid = await _seed_pipeline(
+            repo_id, def_id, status=pipeline_status,
+            clone_path=f"/tmp/ka-c-{uid}",
+        )
+        stage_id = await _seed_stage(pid)
+        await _seed_escalation(pid, stage_id=stage_id)
+
+        resp = await c.get("/escalations")
+        assert resp.status_code == 200
+        kill_url = f"/pipelines/{pid}/kill"
+        if pipeline_status in killable:
+            assert kill_url in resp.text
+        else:
+            assert kill_url not in resp.text

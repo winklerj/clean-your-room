@@ -51,6 +51,21 @@
             <button type="submit" class="btn-dismiss"
                     onclick="return confirm('Dismiss this escalation?')">Dismiss</button>
         </form>
+        <div class="escalation-pipeline-actions">
+            {% if esc.pipeline_status == 'running' %}
+            <form method="post" action="/pipelines/{{ esc.pipeline_id }}/pause"
+                  class="inline-form">
+                <button type="submit" class="btn-action btn-action-pause">Pause Pipeline</button>
+            </form>
+            {% endif %}
+            {% if esc.pipeline_status in ('running', 'paused', 'needs_attention', 'cancel_requested') %}
+            <form method="post" action="/pipelines/{{ esc.pipeline_id }}/kill"
+                  class="inline-form"
+                  onsubmit="return confirm('Force kill this pipeline?')">
+                <button type="submit" class="btn-action btn-action-kill">Kill Pipeline</button>
+            </form>
+            {% endif %}
+        </div>
     </div>
     {% endif %}
 </div>
