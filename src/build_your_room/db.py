@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS pipelines (
     id SERIAL PRIMARY KEY,
     pipeline_def_id INTEGER NOT NULL REFERENCES pipeline_defs(id),
     repo_id INTEGER NOT NULL REFERENCES repos(id),
-    clone_path TEXT NOT NULL,
+    clone_path TEXT,
     workspace_ref TEXT,
     review_base_rev TEXT NOT NULL,
     head_rev TEXT,
@@ -66,6 +66,7 @@ CREATE TABLE IF NOT EXISTS pipelines (
     lease_expires_at TIMESTAMPTZ,
     recovery_state_json TEXT,
     config_json TEXT NOT NULL DEFAULT '{}',
+    clone_cleaned_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );

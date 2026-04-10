@@ -222,6 +222,12 @@
 {# ---- Clone management ---- #}
 <h2>Clone</h2>
 <div class="clone-management">
+    {% if pipeline.clone_cleaned_at %}
+    <div class="clone-cleaned">
+        <span class="clone-cleaned-badge">Clone cleaned</span>
+        <span class="clone-cleaned-at">{{ pipeline.clone_cleaned_at }}</span>
+    </div>
+    {% else %}
     <div class="clone-path">
         <code class="clone-path-text">{{ pipeline.clone_path }}</code>
         <button class="btn-copy-path"
@@ -236,6 +242,7 @@
         <span class="clone-size-value">{{ clone_size }}</span>
     </div>
     {% endif %}
+    {% endif %}
 
     {% if pipeline.review_base_rev %}
     <div class="clone-rev">
@@ -246,7 +253,7 @@
     </div>
     {% endif %}
 
-    {% if is_terminal %}
+    {% if is_terminal and not pipeline.clone_cleaned_at %}
     <div class="clone-actions">
         <form method="post" action="/pipelines/{{ pipeline.id }}/cleanup"
               onsubmit="return confirm('Delete clone for this pipeline?')">

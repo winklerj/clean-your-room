@@ -366,6 +366,15 @@ async def cleanup_pipeline(pipeline_id: int) -> JSONResponse:
         shutil.rmtree(clone_path)
         cleaned = True
 
+    # Mark pipeline as cleaned in DB
+    async with pool.connection() as conn:
+        await conn.execute(
+            "UPDATE pipelines SET clone_path = NULL, clone_cleaned_at = now(), "
+            "updated_at = now() WHERE id = %s",
+            (pipeline_id,),
+        )
+        await conn.commit()
+
     return JSONResponse(content={
         "pipeline_id": pipeline_id,
         "cleaned": cleaned,

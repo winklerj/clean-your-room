@@ -352,6 +352,9 @@ input[type="text"], input[type="url"], input[type="number"] { width: 100%; paddi
 .clone-size-value { font-family: monospace; }
 .clone-rev { font-size: 0.85em; color: #666; margin-bottom: 0.5rem; }
 .clone-actions { margin-top: 0.5rem; }
+.clone-cleaned { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 0.5rem; }
+.clone-cleaned-badge { display: inline-block; font-size: 0.8em; padding: 0.15rem 0.5rem; border-radius: 3px; background: #e8f5e9; color: #2e7d32; border: 1px solid #a5d6a7; font-weight: 500; }
+.clone-cleaned-at { font-size: 0.8em; color: #888; }
 
 /* Pipeline builder */
 .builder-error { background: #f8d7da; border: 1px solid #f5c6cb; border-radius: 6px; padding: 0.75rem 1rem; margin-bottom: 1.5rem; color: #721c24; font-weight: 600; }

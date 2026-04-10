@@ -70,6 +70,9 @@
 
     {% if pipeline.is_terminal %}
     <div class="pipeline-card-actions">
+        {% if pipeline.clone_cleaned_at %}
+        <span class="clone-cleaned-badge">Clone cleaned</span>
+        {% elif pipeline.clone_path %}
         <button class="btn-cleanup"
                 hx-post="/pipelines/{{ pipeline.id }}/cleanup"
                 hx-target="#pipeline-{{ pipeline.id }}"
@@ -77,6 +80,7 @@
                 hx-confirm="Delete clone for this pipeline?">
             Clean up clone
         </button>
+        {% endif %}
     </div>
     {% endif %}
 </div>

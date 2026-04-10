@@ -460,7 +460,7 @@ async def _fetch_pipeline_detail(pipeline_id: int) -> dict[str, Any] | None:
             total_cost += float(sess.get("cost_usd", 0) or 0)
 
     # Clone size
-    clone_size = _get_clone_size(pipeline.get("clone_path", ""))
+    clone_size = _get_clone_size(pipeline.get("clone_path") or "")
 
     return {
         "pipeline": pipeline,
@@ -907,6 +907,15 @@ async def cleanup_pipeline_clone(request: Request, pipeline_id: int):
     if clone_path and clone_path.exists():
         shutil.rmtree(clone_path)
 
+    # Mark pipeline as cleaned in DB
+    async with pool.connection() as conn:
+        await conn.execute(
+            "UPDATE pipelines SET clone_path = NULL, clone_cleaned_at = now(), "
+            "updated_at = now() WHERE id = %s",
+            (pipeline_id,),
+        )
+        await conn.commit()
+
     # Check if this is an HTMX request (card swap) or a full-page request (redirect)
     is_htmx = request.headers.get("HX-Request") == "true"
     if is_htmx:
@@ -981,9 +990,22 @@ async def cleanup_completed_clones():
         )
         rows: list[dict[str, Any]] = await cur.fetchall()  # type: ignore[assignment]
 
+    cleaned_ids: list[int] = []
     for row in rows:
         clone_path = Path(row["clone_path"])
         if clone_path.exists():
             shutil.rmtree(clone_path)
+        cleaned_ids.append(row["id"])
+
+    # Mark all cleaned pipelines in DB
+    if cleaned_ids:
+        async with pool.connection() as conn:
+            for pid in cleaned_ids:
+                await conn.execute(
+                    "UPDATE pipelines SET clone_path = NULL, clone_cleaned_at = now(), "
+                    "updated_at = now() WHERE id = %s",
+                    (pid,),
+                )
+            await conn.commit()
 
     return RedirectResponse(url="/", status_code=303)

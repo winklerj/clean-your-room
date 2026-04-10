@@ -399,3 +399,215 @@ async def test_prop_non_terminal_status_rejects_cleanup(client, status):
 
     resp = await client.post(f"/pipelines/{pid}/cleanup")
     assert resp.status_code == 409
+
+
+# ---------------------------------------------------------------------------
+# Tests — DB state after cleanup ("marks pipeline as cleaned", spec line 965)
+# ---------------------------------------------------------------------------
+
+
+async def _get_pipeline_row(pipeline_id: int) -> dict:
+    """Fetch a raw pipeline row from the DB."""
+    pool = get_pool()
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            "SELECT * FROM pipelines WHERE id = %s", (pipeline_id,),
+        )
+        row = await cur.fetchone()
+        assert row is not None
+        return dict(row)
+
+
+@pytest.mark.asyncio
+async def test_cleanup_sets_clone_path_null_in_db(client, tmp_path):
+    """POST cleanup sets clone_path to NULL in the database.
+
+    Invariant: after cleanup, the pipeline's clone_path must be NULL,
+    indicating the clone directory no longer exists on disk.
+    """
+    clone_dir = tmp_path / "clone-db-test"
+    clone_dir.mkdir()
+    (clone_dir / "file.txt").write_text("data")
+
+    repo_id = await _seed_repo()
+    def_id = await _seed_pipeline_def()
+    pid = await _seed_pipeline(
+        repo_id, def_id, status="completed", clone_path=str(clone_dir),
+    )
+
+    # Verify clone_path is set before cleanup
+    row_before = await _get_pipeline_row(pid)
+    assert row_before["clone_path"] == str(clone_dir)
+
+    await client.post(f"/pipelines/{pid}/cleanup", follow_redirects=False)
+
+    row_after = await _get_pipeline_row(pid)
+    assert row_after["clone_path"] is None
+
+
+@pytest.mark.asyncio
+async def test_cleanup_sets_clone_cleaned_at_timestamp(client):
+    """POST cleanup sets clone_cleaned_at to a non-null timestamp.
+
+    Invariant: the cleaned-at timestamp records when the clone was removed.
+    """
+    repo_id = await _seed_repo()
+    def_id = await _seed_pipeline_def()
+    pid = await _seed_pipeline(repo_id, def_id, status="completed")
+
+    row_before = await _get_pipeline_row(pid)
+    assert row_before["clone_cleaned_at"] is None
+
+    await client.post(f"/pipelines/{pid}/cleanup", follow_redirects=False)
+
+    row_after = await _get_pipeline_row(pid)
+    assert row_after["clone_cleaned_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_cleanup_idempotent_already_cleaned(client):
+    """Second cleanup on an already-cleaned pipeline succeeds (clone_path already NULL).
+
+    Invariant: cleanup is idempotent — calling it twice does not error.
+    """
+    repo_id = await _seed_repo()
+    def_id = await _seed_pipeline_def()
+    pid = await _seed_pipeline(repo_id, def_id, status="completed")
+
+    # First cleanup
+    resp1 = await client.post(f"/pipelines/{pid}/cleanup", follow_redirects=False)
+    assert resp1.status_code == 303
+
+    # Second cleanup — clone_path is now NULL, should still succeed
+    resp2 = await client.post(f"/pipelines/{pid}/cleanup", follow_redirects=False)
+    assert resp2.status_code == 303
+
+
+@pytest.mark.asyncio
+async def test_bulk_cleanup_sets_clone_path_null_for_all(client, tmp_path):
+    """Bulk cleanup sets clone_path to NULL for all cleaned pipelines.
+
+    Invariant: after bulk cleanup, all terminal pipelines with previously
+    non-null clone_path have clone_path = NULL and clone_cleaned_at set.
+    """
+    clone1 = tmp_path / "bulk-1"
+    clone2 = tmp_path / "bulk-2"
+    for d in (clone1, clone2):
+        d.mkdir()
+        (d / "file.txt").write_text("content")
+
+    repo_id = await _seed_repo()
+    def_id = await _seed_pipeline_def()
+    pid1 = await _seed_pipeline(
+        repo_id, def_id, status="completed", clone_path=str(clone1),
+    )
+    pid2 = await _seed_pipeline(
+        repo_id, def_id, status="killed", clone_path=str(clone2),
+    )
+
+    await client.post("/pipelines/cleanup-completed", follow_redirects=False)
+
+    for pid in (pid1, pid2):
+        row = await _get_pipeline_row(pid)
+        assert row["clone_path"] is None, f"Pipeline {pid} clone_path should be NULL"
+        assert row["clone_cleaned_at"] is not None, f"Pipeline {pid} should have cleaned timestamp"
+
+
+@pytest.mark.asyncio
+async def test_dashboard_terminal_count_excludes_cleaned(client):
+    """Dashboard bulk cleanup count excludes already-cleaned pipelines.
+
+    Invariant: the terminal count button should only show pipelines
+    whose clones haven't been cleaned yet.
+    """
+    repo_id = await _seed_repo()
+    def_id = await _seed_pipeline_def()
+
+    # Two completed pipelines
+    pid1 = await _seed_pipeline(repo_id, def_id, status="completed")
+    await _seed_pipeline(repo_id, def_id, status="completed")
+
+    # Clean one of them
+    await client.post(f"/pipelines/{pid1}/cleanup", follow_redirects=False)
+
+    resp = await client.get("/")
+    assert resp.status_code == 200
+    # Only 1 uncleaned terminal pipeline should remain
+    assert "Clean all completed (1)" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_pipeline_card_shows_cleaned_badge_after_cleanup(client):
+    """After cleanup, HTMX pipeline card shows 'Clone cleaned' badge.
+
+    Invariant: cleaned pipelines display a badge instead of the cleanup button.
+    """
+    repo_id = await _seed_repo()
+    def_id = await _seed_pipeline_def()
+    pid = await _seed_pipeline(repo_id, def_id, status="completed")
+
+    resp = await client.post(
+        f"/pipelines/{pid}/cleanup",
+        headers={"HX-Request": "true"},
+    )
+    assert resp.status_code == 200
+    assert "Clone cleaned" in resp.text
+    assert "Clean up clone" not in resp.text
+
+
+@pytest.mark.asyncio
+async def test_detail_page_shows_cleaned_state(client):
+    """Pipeline detail page shows cleaned state after cleanup.
+
+    Invariant: after cleanup, the detail page shows a 'Clone cleaned' badge
+    instead of the clone path and cleanup button.
+    """
+    repo_id = await _seed_repo()
+    def_id = await _seed_pipeline_def()
+    pid = await _seed_pipeline(repo_id, def_id, status="completed")
+
+    # Cleanup
+    await client.post(f"/pipelines/{pid}/cleanup", follow_redirects=False)
+
+    # View detail page
+    resp = await client.get(f"/pipelines/{pid}")
+    assert resp.status_code == 200
+    assert "Clone cleaned" in resp.text
+    assert "Clean up clone" not in resp.text
+
+
+@pytest.mark.asyncio
+async def test_detail_page_hides_copy_path_after_cleanup(client):
+    """Pipeline detail page hides clone path and copy button after cleanup.
+
+    Invariant: once cleaned, there is no path to copy.
+    """
+    repo_id = await _seed_repo()
+    def_id = await _seed_pipeline_def()
+    pid = await _seed_pipeline(repo_id, def_id, status="completed")
+
+    await client.post(f"/pipelines/{pid}/cleanup", follow_redirects=False)
+
+    resp = await client.get(f"/pipelines/{pid}")
+    assert resp.status_code == 200
+    assert "Copy path" not in resp.text
+    assert "clone-path-text" not in resp.text
+
+
+@hyp_settings(
+    max_examples=15,
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
+)
+@given(status=st.sampled_from(["completed", "failed", "cancelled", "killed"]))
+@pytest.mark.asyncio
+async def test_prop_cleanup_always_marks_db(client, status):
+    """Property: cleanup for any terminal status marks clone_path=NULL and sets timestamp."""
+    repo_id = await _seed_repo()
+    def_id = await _seed_pipeline_def()
+    pid = await _seed_pipeline(repo_id, def_id, status=status)
+
+    await client.post(f"/pipelines/{pid}/cleanup", follow_redirects=False)
+
+    row = await _get_pipeline_row(pid)
+    assert row["clone_path"] is None
+    assert row["clone_cleaned_at"] is not None
