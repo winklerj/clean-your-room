@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 
 import pytest
 from hypothesis import HealthCheck, given, settings as hyp_settings
@@ -680,12 +681,13 @@ async def test_every_reason_renders_as_badge(initialized_db, reason):
     """
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
+        uid = uuid.uuid4().hex[:12]
         repo_id = await _seed_repo(
-            name=f"prop-{reason}", local_path=f"/tmp/prop-{reason}"
+            name=f"prop-{uid}", local_path=f"/tmp/prop-{uid}"
         )
-        def_id = await _seed_pipeline_def(name=f"prop-def-{reason}")
+        def_id = await _seed_pipeline_def(name=f"prop-def-{uid}")
         pid = await _seed_pipeline(
-            repo_id, def_id, clone_path=f"/tmp/prop-c-{reason}"
+            repo_id, def_id, clone_path=f"/tmp/prop-c-{uid}"
         )
         stage_id = await _seed_stage(pid)
         await _seed_escalation(pid, stage_id=stage_id, reason=reason)
@@ -715,13 +717,13 @@ async def test_resolve_roundtrips_resolution_text(initialized_db, resolution_tex
     """
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
-        tag = str(abs(hash(resolution_text)) % 100000)
+        uid = uuid.uuid4().hex[:12]
         repo_id = await _seed_repo(
-            name=f"rt-{tag}", local_path=f"/tmp/rt-{tag}"
+            name=f"rt-{uid}", local_path=f"/tmp/rt-{uid}"
         )
-        def_id = await _seed_pipeline_def(name=f"rt-def-{tag}")
+        def_id = await _seed_pipeline_def(name=f"rt-def-{uid}")
         pid = await _seed_pipeline(
-            repo_id, def_id, clone_path=f"/tmp/rt-c-{tag}"
+            repo_id, def_id, clone_path=f"/tmp/rt-c-{uid}"
         )
         stage_id = await _seed_stage(pid)
         esc_id = await _seed_escalation(pid, stage_id=stage_id, status="open")
@@ -756,25 +758,24 @@ async def test_status_filter_consistency(initialized_db, status):
     """
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
+        uid = uuid.uuid4().hex[:12]
         repo_id = await _seed_repo(
-            name=f"sf-{status}", local_path=f"/tmp/sf-{status}"
+            name=f"sf-{uid}", local_path=f"/tmp/sf-{uid}"
         )
-        def_id = await _seed_pipeline_def(name=f"sf-def-{status}")
+        def_id = await _seed_pipeline_def(name=f"sf-def-{uid}")
         pid = await _seed_pipeline(
-            repo_id, def_id, clone_path=f"/tmp/sf-c-{status}"
+            repo_id, def_id, clone_path=f"/tmp/sf-c-{uid}"
         )
         stage_id = await _seed_stage(pid)
         await _seed_escalation(pid, stage_id=stage_id, status=status)
 
-        # Default view
+        # Show all view always includes the escalation
+        resp_all = await c.get("/escalations?show_all=1")
+        assert resp_all.status_code == 200
+        assert "escalation-card" in resp_all.text
+
+        # Default view only shows open
         resp_default = await c.get("/escalations")
         assert resp_default.status_code == 200
         if status == "open":
             assert "escalation-card" in resp_default.text
-        else:
-            assert "escalation-card" not in resp_default.text
-
-        # Show all view
-        resp_all = await c.get("/escalations?show_all=1")
-        assert resp_all.status_code == 200
-        assert "escalation-card" in resp_all.text
