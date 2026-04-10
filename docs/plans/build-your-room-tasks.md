@@ -59,4 +59,4 @@ Tracking progress on the build-your-room spec implementation plan.
 ## Phase 7: Architecture Alignment (spec-mandated module extractions)
 
 - [x] 37. Extract lease management into lease_manager.py — LeaseManager class with multi-level acquire/release/renew for pipelines/stages/sessions, heartbeat_loop, expiry queries (is_lease_expired, get_expired_running_pipelines, get_live_running_pipelines), release_all_for_pipeline bulk cleanup, LeaseError exception, orchestrator delegated to LeaseManager, 32 new tests (1063 total)
-- [ ] 38. Extract recovery into recovery.py — Startup reconciliation + restart recovery, dirty workspace snapshot/reset, recovery from recovery_state_json
+- [x] 38. Extract recovery into recovery.py — RecoveryManager class with reconcile_running_state (startup scan of stale running rows, stage/session/task cleanup), snapshot_dirty_workspace (metadata file creation, DB state update), handle_cancellation (HTN claim release, session/stage cancellation, workspace snapshot), load_visit_counts static helper, orchestrator delegates all recovery operations via _recovery_manager field, injectable pipelines_dir for testing, 33 new tests (1096 total)

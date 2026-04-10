@@ -25,6 +25,7 @@ from build_your_room.orchestrator import (
     STAGE_RESULT_VALIDATION_FAILED,
     PipelineOrchestrator,
 )
+from build_your_room.recovery import RecoveryManager
 from build_your_room.streaming import LogBuffer
 
 # ---------------------------------------------------------------------------
@@ -360,15 +361,12 @@ class TestReconciliation:
             )
             await conn.commit()
 
-        import build_your_room.orchestrator as orch_mod
-
-        original_pipelines_dir = orch_mod.PIPELINES_DIR
-        orch_mod.PIPELINES_DIR = tmp_path / "pipelines"
-        try:
-            orch = PipelineOrchestrator(pool, LogBuffer())
-            await orch.reconcile_running_state()
-        finally:
-            orch_mod.PIPELINES_DIR = original_pipelines_dir
+        log_buffer = LogBuffer()
+        recovery_mgr = RecoveryManager(
+            pool, log_buffer, pipelines_dir=tmp_path / "pipelines"
+        )
+        orch = PipelineOrchestrator(pool, log_buffer, recovery_manager=recovery_mgr)
+        await orch.reconcile_running_state()
 
         async with pool.connection() as conn:
             row = await (
