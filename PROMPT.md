@@ -5,6 +5,7 @@ Use HTN planning and implement the next incomplete task ready to be implemented 
 Important:
 - For design decisions, add a clear-labeled task for CEO and update blocked tasks
 - Lint, run tests and type checking after making changes until all pass
+- Make sure the server starts
 - Update the task list with progress on the task
 - Write a diary entry for learnings
 - Git commit the changes (no Claude/OpenAI attribution), push if remote exists
