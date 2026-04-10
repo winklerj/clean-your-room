@@ -8,7 +8,6 @@ CLONES_DIR = BUILD_YOUR_ROOM_DIR / "clones"
 PIPELINES_DIR = BUILD_YOUR_ROOM_DIR / "pipelines"
 
 DATABASE_URL = os.getenv("DATABASE_URL", "postgres:///build_your_room")
-DB_PATH = BUILD_YOUR_ROOM_DIR / "build_your_room.db"
 
 DEFAULT_PORT = int(os.getenv("BUILD_YOUR_ROOM_PORT", "8317"))
 DEFAULT_CLAUDE_MODEL = os.getenv("DEFAULT_CLAUDE_MODEL", "claude-sonnet-4-6")

@@ -1,10 +1,10 @@
 from pathlib import Path
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Request, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from build_your_room.config import DB_PATH
-from build_your_room.db import get_db
+from build_your_room.db import get_pool
 
 router = APIRouter(prefix="/repos")
 
@@ -20,26 +20,24 @@ async def add_repo(
     if not resolved.is_dir():
         raise HTTPException(400, f"Directory does not exist: {local_path}")
 
-    db = await get_db(DB_PATH)
-    try:
-        cursor = await db.execute(
-            "SELECT id FROM repos WHERE local_path=?", (str(resolved),)
+    pool = get_pool()
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            "SELECT id FROM repos WHERE local_path=%s", (str(resolved),),
         )
-        existing = await cursor.fetchone()
+        existing: dict[str, Any] | None = await cur.fetchone()  # type: ignore[assignment]
         if existing:
-            return RedirectResponse(f"/repos/{existing[0]}", status_code=303)
+            return RedirectResponse(f"/repos/{existing['id']}", status_code=303)
 
-        cursor = await db.execute(
+        cur = await conn.execute(
             "INSERT INTO repos (name, local_path, git_url, default_branch) "
-            "VALUES (?, ?, ?, ?) RETURNING id",
+            "VALUES (%s, %s, %s, %s) RETURNING id",
             (name, str(resolved), git_url or None, default_branch),
         )
-        row = await cursor.fetchone()
+        row: dict[str, Any] | None = await cur.fetchone()  # type: ignore[assignment]
         assert row is not None
-        repo_id = row[0]
-        await db.commit()
-    finally:
-        await db.close()
+        repo_id = row["id"]
+        await conn.commit()
     return RedirectResponse(f"/repos/{repo_id}", status_code=303)
 
 
@@ -47,25 +45,21 @@ async def add_repo(
 async def repo_detail(request: Request, repo_id: int):
     from build_your_room.main import templates
 
-    db = await get_db(DB_PATH)
-    try:
-        cursor = await db.execute("SELECT * FROM repos WHERE id=?", (repo_id,))
-        repo = await cursor.fetchone()
-        if not repo:
-            raise HTTPException(404, "Repo not found")
-        return templates.TemplateResponse("repo_detail.html", {
-            "request": request, "repo": repo,
-        })
-    finally:
-        await db.close()
+    pool = get_pool()
+    async with pool.connection() as conn:
+        cur = await conn.execute("SELECT * FROM repos WHERE id=%s", (repo_id,))
+        repo = await cur.fetchone()
+    if not repo:
+        raise HTTPException(404, "Repo not found")
+    return templates.TemplateResponse("repo_detail.html", {
+        "request": request, "repo": repo,
+    })
 
 
 @router.post("/{repo_id}/archive", response_class=RedirectResponse)
 async def archive_repo(repo_id: int):
-    db = await get_db(DB_PATH)
-    try:
-        await db.execute("UPDATE repos SET archived=1 WHERE id=?", (repo_id,))
-        await db.commit()
-    finally:
-        await db.close()
+    pool = get_pool()
+    async with pool.connection() as conn:
+        await conn.execute("UPDATE repos SET archived=1 WHERE id=%s", (repo_id,))
+        await conn.commit()
     return RedirectResponse(f"/repos/{repo_id}", status_code=303)

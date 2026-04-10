@@ -1,8 +1,7 @@
 from fastapi import APIRouter, Request, Form
 from fastapi.responses import HTMLResponse
 
-from build_your_room.config import DB_PATH
-from build_your_room.db import get_db
+from build_your_room.db import get_pool
 
 router = APIRouter(prefix="/prompts")
 
@@ -11,15 +10,13 @@ router = APIRouter(prefix="/prompts")
 async def list_prompts(request: Request):
     from build_your_room.main import templates
 
-    db = await get_db(DB_PATH)
-    try:
-        cursor = await db.execute("SELECT * FROM prompts ORDER BY id")
-        prompts = await cursor.fetchall()
-        return templates.TemplateResponse("prompts.html", {
-            "request": request, "prompts": prompts,
-        })
-    finally:
-        await db.close()
+    pool = get_pool()
+    async with pool.connection() as conn:
+        cur = await conn.execute("SELECT * FROM prompts ORDER BY id")
+        prompts = await cur.fetchall()
+    return templates.TemplateResponse("prompts.html", {
+        "request": request, "prompts": prompts,
+    })
 
 
 @router.post("", response_class=HTMLResponse)
@@ -32,20 +29,18 @@ async def create_prompt(
 ):
     from build_your_room.main import templates
 
-    db = await get_db(DB_PATH)
-    try:
-        cursor = await db.execute(
+    pool = get_pool()
+    async with pool.connection() as conn:
+        cur = await conn.execute(
             "INSERT INTO prompts (name, body, stage_type, agent_type) "
-            "VALUES (?, ?, ?, ?) RETURNING *",
+            "VALUES (%s, %s, %s, %s) RETURNING *",
             (name, body, stage_type, agent_type),
         )
-        prompt = await cursor.fetchone()
-        await db.commit()
-        return templates.TemplateResponse("partials/prompt_row.html", {
-            "request": request, "prompt": prompt,
-        })
-    finally:
-        await db.close()
+        prompt = await cur.fetchone()
+        await conn.commit()
+    return templates.TemplateResponse("partials/prompt_row.html", {
+        "request": request, "prompt": prompt,
+    })
 
 
 @router.put("/{prompt_id}", response_class=HTMLResponse)
@@ -59,58 +54,50 @@ async def update_prompt(
 ):
     from build_your_room.main import templates
 
-    db = await get_db(DB_PATH)
-    try:
-        cursor = await db.execute(
-            "UPDATE prompts SET name=?, body=?, stage_type=?, agent_type=?, "
-            "updated_at=datetime('now') WHERE id=? RETURNING *",
+    pool = get_pool()
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            "UPDATE prompts SET name=%s, body=%s, stage_type=%s, agent_type=%s, "
+            "updated_at=now() WHERE id=%s RETURNING *",
             (name, body, stage_type, agent_type, prompt_id),
         )
-        prompt = await cursor.fetchone()
-        await db.commit()
-        return templates.TemplateResponse("partials/prompt_row.html", {
-            "request": request, "prompt": prompt,
-        })
-    finally:
-        await db.close()
+        prompt = await cur.fetchone()
+        await conn.commit()
+    return templates.TemplateResponse("partials/prompt_row.html", {
+        "request": request, "prompt": prompt,
+    })
 
 
 @router.delete("/{prompt_id}", response_class=HTMLResponse)
 async def delete_prompt(prompt_id: int):
-    db = await get_db(DB_PATH)
-    try:
-        await db.execute("DELETE FROM prompts WHERE id=?", (prompt_id,))
-        await db.commit()
-        return HTMLResponse("")
-    finally:
-        await db.close()
+    pool = get_pool()
+    async with pool.connection() as conn:
+        await conn.execute("DELETE FROM prompts WHERE id=%s", (prompt_id,))
+        await conn.commit()
+    return HTMLResponse("")
 
 
 @router.get("/{prompt_id}/edit", response_class=HTMLResponse)
 async def edit_prompt_form(request: Request, prompt_id: int):
     from build_your_room.main import templates
 
-    db = await get_db(DB_PATH)
-    try:
-        cursor = await db.execute("SELECT * FROM prompts WHERE id=?", (prompt_id,))
-        prompt = await cursor.fetchone()
-        return templates.TemplateResponse("partials/prompt_form.html", {
-            "request": request, "prompt": prompt,
-        })
-    finally:
-        await db.close()
+    pool = get_pool()
+    async with pool.connection() as conn:
+        cur = await conn.execute("SELECT * FROM prompts WHERE id=%s", (prompt_id,))
+        prompt = await cur.fetchone()
+    return templates.TemplateResponse("partials/prompt_form.html", {
+        "request": request, "prompt": prompt,
+    })
 
 
 @router.get("/{prompt_id}/row", response_class=HTMLResponse)
 async def prompt_row(request: Request, prompt_id: int):
     from build_your_room.main import templates
 
-    db = await get_db(DB_PATH)
-    try:
-        cursor = await db.execute("SELECT * FROM prompts WHERE id=?", (prompt_id,))
-        prompt = await cursor.fetchone()
-        return templates.TemplateResponse("partials/prompt_row.html", {
-            "request": request, "prompt": prompt,
-        })
-    finally:
-        await db.close()
+    pool = get_pool()
+    async with pool.connection() as conn:
+        cur = await conn.execute("SELECT * FROM prompts WHERE id=%s", (prompt_id,))
+        prompt = await cur.fetchone()
+    return templates.TemplateResponse("partials/prompt_row.html", {
+        "request": request, "prompt": prompt,
+    })

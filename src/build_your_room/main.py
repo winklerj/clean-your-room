@@ -4,8 +4,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pathlib import Path
 
-from build_your_room.config import BUILD_YOUR_ROOM_DIR, DB_PATH
-from build_your_room.db import init_db
+from build_your_room.config import BUILD_YOUR_ROOM_DIR, DATABASE_URL
+from build_your_room.db import init_db, close_pool
 from build_your_room.routes.dashboard import router as dashboard_router
 from build_your_room.routes.prompts import router as prompts_router
 from build_your_room.routes.repos import router as repos_router
@@ -14,8 +14,9 @@ from build_your_room.routes.repos import router as repos_router
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     BUILD_YOUR_ROOM_DIR.mkdir(parents=True, exist_ok=True)
-    await init_db(DB_PATH)
+    await init_db(DATABASE_URL)
     yield
+    await close_pool()
 
 
 app = FastAPI(lifespan=lifespan)

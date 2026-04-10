@@ -5,7 +5,7 @@ Tracking progress on the build-your-room spec implementation plan.
 ## Phase 1: Foundation (scaffold + DB + core loop)
 
 - [x] 1. Fork clean-your-room → build-your-room, strip specs-monorepo and GitHub-specific code
-- [ ] 2. New PostgreSQL schema + import path from old SQLite tables (including HTN task tables)
+- [x] 2. New PostgreSQL schema + import path from old SQLite tables (including HTN task tables)
 - [ ] 3. PipelineOrchestrator skeleton with stage-graph dispatch, durable leases, dirty-workspace recovery, and startup reconciliation
 - [ ] 4. CloneManager for repo cloning, workspace refs, cleanup, and reset-to-head behavior
 - [ ] 5. Sandbox/path guard abstraction + per-stage tool profiles reused by adapters and verifiers

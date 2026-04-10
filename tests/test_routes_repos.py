@@ -1,39 +1,23 @@
+from __future__ import annotations
+
 import pytest
 from httpx import AsyncClient, ASGITransport
-from unittest.mock import patch
 
-from build_your_room.db import init_db
 from build_your_room.main import app
 
 
 @pytest.fixture
-async def test_app(tmp_path):
-    db_path = tmp_path / "test.db"
-    await init_db(db_path)
-    # Create a real directory to use as local_path
-    repo_dir = tmp_path / "my-repo"
-    repo_dir.mkdir()
-    with patch("build_your_room.routes.repos.DB_PATH", db_path):
-        yield app, repo_dir
-
-
-@pytest.fixture
-async def client(test_app):
-    test_app_instance, _ = test_app
-    transport = ASGITransport(app=test_app_instance)
+async def client(initialized_db):
+    transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
 
 
-@pytest.fixture
-def repo_dir(test_app):
-    _, repo_dir = test_app
-    return repo_dir
-
-
 @pytest.mark.asyncio
-async def test_add_repo(client, repo_dir):
+async def test_add_repo(client, tmp_path):
     """POST /repos creates a repo record for a local path."""
+    repo_dir = tmp_path / "my-repo"
+    repo_dir.mkdir()
     resp = await client.post("/repos", data={
         "name": "my-project",
         "local_path": str(repo_dir),
@@ -52,8 +36,10 @@ async def test_add_repo_nonexistent_path(client, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_repo_detail(client, repo_dir):
+async def test_repo_detail(client, tmp_path):
     """GET /repos/{id} shows repo info."""
+    repo_dir = tmp_path / "my-repo"
+    repo_dir.mkdir()
     await client.post("/repos", data={
         "name": "my-project",
         "local_path": str(repo_dir),
@@ -64,8 +50,10 @@ async def test_repo_detail(client, repo_dir):
 
 
 @pytest.mark.asyncio
-async def test_archive_repo(client, repo_dir):
+async def test_archive_repo(client, tmp_path):
     """POST /repos/{id}/archive marks repo as archived."""
+    repo_dir = tmp_path / "my-repo"
+    repo_dir.mkdir()
     await client.post("/repos", data={
         "name": "my-project",
         "local_path": str(repo_dir),
