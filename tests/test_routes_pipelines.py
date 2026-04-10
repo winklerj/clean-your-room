@@ -397,10 +397,11 @@ async def test_pipeline_detail_stages_listed(client):
 
 
 @pytest.mark.asyncio
-async def test_pipeline_detail_stage_output_artifact(client):
-    """Stage output artifact path is displayed when present.
+async def test_pipeline_detail_stage_has_artifact_hint(client):
+    """Stage tab header shows 'has artifact' hint when output_artifact is set.
 
-    Invariant: if output_artifact is non-null, it appears in the stage tab.
+    Invariant: if output_artifact is non-null, the compact tab summary includes
+    the hint. Full artifact content is loaded via HTMX stage detail.
     """
     repo_id = await _seed_repo()
     def_id = await _seed_pipeline_def()
@@ -409,40 +410,38 @@ async def test_pipeline_detail_stage_output_artifact(client):
 
     resp = await client.get(f"/pipelines/{pid}")
     assert resp.status_code == 200
-    assert "stage-tab-artifact" in resp.text
-    assert "spec.md" in resp.text
+    assert "has artifact" in resp.text
 
 
 @pytest.mark.asyncio
-async def test_pipeline_detail_stage_escalation_reason(client):
-    """Stage escalation reason is displayed when present.
+async def test_pipeline_detail_stage_escalation_in_detail(client):
+    """Stage escalation reason is displayed in the HTMX stage detail partial.
 
-    Invariant: if escalation_reason is set, it appears human-readable.
+    Invariant: if escalation_reason is set, it appears in the stage detail.
     """
     repo_id = await _seed_repo()
     def_id = await _seed_pipeline_def()
     pid = await _seed_pipeline(repo_id, def_id)
-    await _seed_stage(pid, escalation_reason="max_iterations")
+    sid = await _seed_stage(pid, escalation_reason="max_iterations")
 
-    resp = await client.get(f"/pipelines/{pid}")
+    resp = await client.get(f"/pipelines/{pid}/stages/{sid}")
     assert resp.status_code == 200
-    assert "stage-tab-escalation" in resp.text
     assert "max iterations" in resp.text
 
 
 @pytest.mark.asyncio
-async def test_pipeline_detail_stage_iteration_progress(client):
-    """Multi-iteration stages show iteration progress.
+async def test_pipeline_detail_stage_iteration_in_detail(client):
+    """Multi-iteration stages show iteration progress in stage detail partial.
 
-    Invariant: if max_iterations > 1, "Iteration X/Y" is displayed.
+    Invariant: if max_iterations > 1, "Iteration X/Y" is displayed in detail.
     """
     repo_id = await _seed_repo()
     def_id = await _seed_pipeline_def()
     pid = await _seed_pipeline(repo_id, def_id)
-    await _seed_stage(pid, stage_key="impl_task", stage_type="impl_task",
-                      iteration=7, max_iterations=50)
+    sid = await _seed_stage(pid, stage_key="impl_task", stage_type="impl_task",
+                            iteration=7, max_iterations=50)
 
-    resp = await client.get(f"/pipelines/{pid}")
+    resp = await client.get(f"/pipelines/{pid}/stages/{sid}")
     assert resp.status_code == 200
     assert "7/50" in resp.text
 
@@ -463,18 +462,18 @@ async def test_pipeline_detail_no_stages(client):
 
 
 @pytest.mark.asyncio
-async def test_pipeline_detail_stage_revisions(client):
-    """Stage entry and exit revisions are displayed.
+async def test_pipeline_detail_stage_revisions_in_detail(client):
+    """Stage entry and exit revisions are displayed in the stage detail partial.
 
     Invariant: entry_rev and exit_rev are shown truncated to 12 chars.
     """
     repo_id = await _seed_repo()
     def_id = await _seed_pipeline_def()
     pid = await _seed_pipeline(repo_id, def_id)
-    await _seed_stage(pid, entry_rev="aabbccddee11223344",
-                      exit_rev="ff00112233445566")
+    sid = await _seed_stage(pid, entry_rev="aabbccddee11223344",
+                            exit_rev="ff00112233445566")
 
-    resp = await client.get(f"/pipelines/{pid}")
+    resp = await client.get(f"/pipelines/{pid}/stages/{sid}")
     assert resp.status_code == 200
     assert "aabbccddee11" in resp.text
     assert "ff0011223344" in resp.text
@@ -486,10 +485,11 @@ async def test_pipeline_detail_stage_revisions(client):
 
 
 @pytest.mark.asyncio
-async def test_pipeline_detail_sessions_shown(client):
-    """Sessions are listed within their parent stage.
+async def test_pipeline_detail_sessions_count_in_tab(client):
+    """Stage tab header shows session count summary.
 
-    Invariant: each agent_session row appears under its stage tab.
+    Invariant: stage tab compact header includes session count.
+    Full session details are loaded via HTMX stage detail partial.
     """
     repo_id = await _seed_repo()
     def_id = await _seed_pipeline_def()
@@ -501,17 +501,15 @@ async def test_pipeline_detail_sessions_shown(client):
 
     resp = await client.get(f"/pipelines/{pid}")
     assert resp.status_code == 200
-    assert "stage-sessions" in resp.text
-    assert "claude_sdk" in resp.text
-    assert "45%" in resp.text
-    assert "1500 tokens" in resp.text
+    assert "1 session" in resp.text
+    assert "hx-get" in resp.text
 
 
 @pytest.mark.asyncio
-async def test_pipeline_detail_multiple_sessions(client):
-    """Multiple sessions within a stage are all displayed.
+async def test_pipeline_detail_multiple_sessions_count(client):
+    """Stage tab shows plural session count for multiple sessions.
 
-    Invariant: session count header matches actual session rows.
+    Invariant: session count in tab header is correct.
     """
     repo_id = await _seed_repo()
     def_id = await _seed_pipeline_def()
@@ -523,7 +521,7 @@ async def test_pipeline_detail_multiple_sessions(client):
 
     resp = await client.get(f"/pipelines/{pid}")
     assert resp.status_code == 200
-    assert "Sessions (3)" in resp.text
+    assert "3 sessions" in resp.text
 
 
 # ---------------------------------------------------------------------------

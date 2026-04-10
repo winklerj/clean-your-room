@@ -1,0 +1,102 @@
+{# Stage detail partial — loaded via HTMX into pipeline detail stage tabs #}
+<div class="stage-detail">
+    <div class="stage-detail-info">
+        <span>Type: {{ stage.stage_type }}</span>
+        <span>Agent: {{ stage.agent_type }}</span>
+        {% if stage.max_iterations > 1 %}
+        <span>Iteration: {{ stage.iteration }}/{{ stage.max_iterations }}</span>
+        {% endif %}
+        {% if stage.entry_rev %}
+        <span>Entry rev: <code>{{ stage.entry_rev[:12] }}</code></span>
+        {% endif %}
+        {% if stage.exit_rev %}
+        <span>Exit rev: <code>{{ stage.exit_rev[:12] }}</code></span>
+        {% endif %}
+    </div>
+
+    {% if stage.escalation_reason %}
+    <div class="stage-detail-escalation">
+        Escalated: {{ stage.escalation_reason | replace('_', ' ') }}
+    </div>
+    {% endif %}
+
+    {# ---- Output artifact ---- #}
+    {% if artifact_content %}
+    <div class="stage-detail-section">
+        <h4>Output Artifact</h4>
+        <div class="stage-detail-artifact-path">
+            <code>{{ stage.output_artifact }}</code>
+        </div>
+        <div class="artifact-content">{{ artifact_content }}</div>
+    </div>
+    {% elif stage.output_artifact %}
+    <div class="stage-detail-section">
+        <h4>Output Artifact</h4>
+        <div class="stage-detail-artifact-path">
+            <code>{{ stage.output_artifact }}</code>
+            <span class="artifact-unavailable">(file not readable)</span>
+        </div>
+    </div>
+    {% endif %}
+
+    {# ---- Review feedback history ---- #}
+    {% if review_feedback %}
+    <div class="stage-detail-section">
+        <h4>Review Feedback ({{ review_feedback | length }})</h4>
+        <div class="review-feedback-list">
+            {% for fb in review_feedback %}
+            <div class="review-feedback-entry">
+                <span class="review-feedback-time">{{ fb.created_at }}</span>
+                <div class="review-feedback-content">{{ fb.content }}</div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    {# ---- Sessions with logs ---- #}
+    {% if sessions %}
+    <div class="stage-detail-section">
+        <h4>Sessions ({{ sessions | length }})</h4>
+        {% for sess in sessions %}
+        <div class="stage-detail-session">
+            <div class="stage-detail-session-header">
+                <span class="session-type">{{ sess.session_type }}</span>
+                <span class="status-badge status-{{ sess.status }}">{{ sess.status }}</span>
+                {% if sess.context_usage_pct is not none %}
+                <span class="session-context-usage">
+                    <span class="context-label">Context:</span>
+                    <span class="progress-bar progress-bar-inline">
+                        <span class="progress-fill {% if sess.context_usage_pct > 80 %}progress-ctx-high{% elif sess.context_usage_pct > 50 %}progress-ctx-warn{% else %}progress-ctx-ok{% endif %}"
+                              style="width: {{ sess.context_usage_pct }}%"></span>
+                    </span>
+                    <span class="context-pct">{{ "%.0f"|format(sess.context_usage_pct) }}%</span>
+                </span>
+                {% endif %}
+                <span class="session-cost">${{ "%.4f"|format(sess.cost_usd) }}</span>
+                <span class="session-tokens">{{ sess.token_input + sess.token_output }} tokens</span>
+            </div>
+
+            {% if sess.logs %}
+            <details class="session-logs-expand">
+                <summary>Logs ({{ sess.logs | length }} entries)</summary>
+                <div class="session-logs">
+                    {% for log in sess.logs %}
+                    <div class="log-entry log-{{ log.event_type }}">
+                        <span class="log-time">{{ log.created_at }}</span>
+                        <span class="log-type">{{ log.event_type }}</span>
+                        <span class="log-content">{{ log.content }}</span>
+                    </div>
+                    {% endfor %}
+                </div>
+            </details>
+            {% else %}
+            <p class="session-no-logs">No log entries.</p>
+            {% endif %}
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <p class="empty-state">No sessions for this stage.</p>
+    {% endif %}
+</div>

@@ -576,6 +576,99 @@ async def pipeline_logs_partial(request: Request, pipeline_id: int):
     })
 
 
+async def _fetch_stage_detail(
+    pipeline_id: int, stage_id: int,
+) -> dict[str, Any] | None:
+    """Query all data needed for the stage detail partial.
+
+    Returns the stage row, its sessions with per-session logs,
+    review feedback entries, output artifact content, and
+    per-session context usage information.
+    """
+    pool = get_pool()
+    async with pool.connection() as conn:
+        # Stage row with pipeline ownership check
+        cur = await conn.execute(
+            "SELECT * FROM pipeline_stages WHERE id = %s AND pipeline_id = %s",
+            (stage_id, pipeline_id),
+        )
+        stage: dict[str, Any] | None = await cur.fetchone()  # type: ignore[assignment]
+        if stage is None:
+            return None
+
+        # Sessions for this stage
+        cur = await conn.execute(
+            "SELECT * FROM agent_sessions "
+            "WHERE pipeline_stage_id = %s ORDER BY started_at ASC",
+            (stage_id,),
+        )
+        sessions: list[dict[str, Any]] = await cur.fetchall()  # type: ignore[assignment]
+
+        session_ids = [s["id"] for s in sessions]
+        logs_by_session: dict[int, list[dict[str, Any]]] = {
+            sid: [] for sid in session_ids
+        }
+        review_feedback: list[dict[str, Any]] = []
+
+        if session_ids:
+            placeholders = ",".join(["%s"] * len(session_ids))
+            cur = await conn.execute(
+                "SELECT * FROM session_logs "
+                f"WHERE agent_session_id IN ({placeholders}) "
+                "ORDER BY created_at ASC",
+                tuple(session_ids),
+            )
+            all_logs: list[dict[str, Any]] = await cur.fetchall()  # type: ignore[assignment]
+            for log in all_logs:
+                logs_by_session[log["agent_session_id"]].append(log)
+                if log["event_type"] == "review_feedback":
+                    review_feedback.append(log)
+
+    # Enrich sessions with their logs and context usage
+    enriched_sessions: list[dict[str, Any]] = []
+    for s in sessions:
+        enriched_sessions.append({
+            **s,
+            "logs": logs_by_session.get(s["id"], []),
+        })
+
+    # Read output artifact content (if path exists and file is readable)
+    artifact_content: str | None = None
+    artifact_path = stage.get("output_artifact")
+    if artifact_path:
+        try:
+            artifact_content = Path(artifact_path).read_text(encoding="utf-8")
+        except (OSError, ValueError):
+            artifact_content = None
+
+    return {
+        "stage": stage,
+        "sessions": enriched_sessions,
+        "review_feedback": review_feedback,
+        "artifact_content": artifact_content,
+    }
+
+
+@router.get(
+    "/pipelines/{pipeline_id}/stages/{stage_id}", response_class=HTMLResponse,
+)
+async def stage_detail_partial(
+    request: Request, pipeline_id: int, stage_id: int,
+):
+    """HTMX partial: stage detail with sessions, logs, artifacts, review feedback."""
+    from build_your_room.main import templates
+
+    data = await _fetch_stage_detail(pipeline_id, stage_id)
+    if data is None:
+        return HTMLResponse("<p>Stage not found</p>", status_code=404)
+
+    return templates.TemplateResponse("partials/stage_detail.html", {
+        "request": request,
+        "pipeline_id": pipeline_id,
+        **data,
+    })
+
+
 async def _fetch_pipeline_card_data(
     pipeline_id: int,
 ) -> dict[str, Any] | None:

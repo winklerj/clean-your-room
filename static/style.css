@@ -218,7 +218,48 @@ input[type="text"], input[type="url"], input[type="number"] { width: 100%; paddi
 .stage-tab-artifact { color: #555; margin-bottom: 0.3rem; }
 .stage-tab-escalation { color: #d9534f; font-weight: 600; margin-bottom: 0.3rem; }
 
-/* Sessions within stages */
+/* Stage tab clickable headers */
+.stage-tab-clickable { cursor: pointer; user-select: none; }
+.stage-tab-clickable:hover { background: #f6f8fa; border-radius: 4px; }
+.stage-tab-summary { font-size: 0.8em; color: #888; margin-left: auto; }
+.stage-tab-expand-hint { font-size: 0.75em; color: #3498db; margin-left: 0.5rem; }
+.stage-tab-clickable:hover .stage-tab-expand-hint { text-decoration: underline; }
+
+/* Stage detail partial */
+.stage-detail { padding-top: 0.75rem; border-top: 1px solid #eee; margin-top: 0.5rem; }
+.stage-detail-info { display: flex; gap: 1rem; flex-wrap: wrap; color: #666; font-size: 0.9em; margin-bottom: 0.5rem; }
+.stage-detail-escalation { color: #d9534f; font-weight: 600; margin-bottom: 0.5rem; }
+.stage-detail-section { margin-bottom: 1rem; }
+.stage-detail-section h4 { font-size: 0.9em; color: #555; margin: 0 0 0.5rem 0; border-bottom: 1px solid #eee; padding-bottom: 0.25rem; }
+
+/* Output artifact content */
+.stage-detail-artifact-path { margin-bottom: 0.5rem; }
+.stage-detail-artifact-path code { font-size: 0.85em; color: #555; }
+.artifact-unavailable { font-size: 0.85em; color: #999; font-style: italic; margin-left: 0.5rem; }
+.artifact-content { background: #f6f8fa; border: 1px solid #e1e4e8; border-radius: 4px; padding: 0.75rem; font-size: 0.85em; white-space: pre-wrap; word-wrap: break-word; max-height: 400px; overflow-y: auto; font-family: monospace; }
+
+/* Review feedback */
+.review-feedback-list { display: flex; flex-direction: column; gap: 0.5rem; }
+.review-feedback-entry { border-left: 3px solid #8e44ad; padding: 0.5rem 0.75rem; background: #faf5ff; border-radius: 0 4px 4px 0; }
+.review-feedback-time { font-size: 0.8em; color: #888; display: block; margin-bottom: 0.25rem; }
+.review-feedback-content { font-size: 0.9em; white-space: pre-wrap; word-wrap: break-word; }
+
+/* Sessions within stage detail */
+.stage-detail-session { border: 1px solid #eee; border-radius: 6px; padding: 0.5rem 0.75rem; margin-bottom: 0.5rem; background: #fff; }
+.stage-detail-session-header { display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; font-size: 0.85em; }
+.session-context-usage { display: inline-flex; align-items: center; gap: 0.3rem; }
+.context-label { color: #555; font-size: 0.9em; }
+.progress-bar-inline { display: inline-block; width: 60px; height: 6px; vertical-align: middle; }
+.context-pct { font-weight: 600; color: #555; font-size: 0.9em; }
+.session-no-logs { font-size: 0.8em; color: #999; font-style: italic; margin: 0.25rem 0 0 0; }
+
+/* Session logs expandable */
+.session-logs-expand { margin-top: 0.4rem; }
+.session-logs-expand summary { font-size: 0.85em; color: #0366d6; cursor: pointer; }
+.session-logs-expand summary:hover { text-decoration: underline; }
+.session-logs { background: #1e1e1e; border-radius: 4px; padding: 0.5rem; max-height: 300px; overflow-y: auto; margin-top: 0.3rem; }
+
+/* Sessions within stages (legacy inline summary) */
 .stage-sessions { margin-top: 0.5rem; }
 .stage-sessions h4 { font-size: 0.9em; color: #555; margin: 0 0 0.3rem 0; }
 .session-row { display: flex; gap: 0.75rem; align-items: center; padding: 0.3rem 0; border-bottom: 1px solid #f0f0f0; font-size: 0.85em; }
