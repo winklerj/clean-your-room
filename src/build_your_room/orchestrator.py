@@ -9,11 +9,13 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from pathlib import Path
 from typing import Any
 
 from psycopg_pool import AsyncConnectionPool
 
 from build_your_room.adapters.base import AgentAdapter
+from build_your_room.clone_manager import CloneManager
 from build_your_room.config import (
     PIPELINE_HEARTBEAT_INTERVAL_SEC,
     PIPELINE_LEASE_TTL_SEC,
@@ -60,6 +62,7 @@ class PipelineOrchestrator:
         lease_ttl_sec: int = PIPELINE_LEASE_TTL_SEC,
         heartbeat_interval_sec: int = PIPELINE_HEARTBEAT_INTERVAL_SEC,
         adapters: dict[str, AgentAdapter] | None = None,
+        clone_manager: CloneManager | None = None,
         lease_manager: LeaseManager | None = None,
         recovery_manager: RecoveryManager | None = None,
     ) -> None:
@@ -69,6 +72,7 @@ class PipelineOrchestrator:
         self._lease_ttl_sec = lease_ttl_sec
         self._heartbeat_interval_sec = heartbeat_interval_sec
         self._adapters: dict[str, AgentAdapter] = adapters or {}
+        self._clone_manager = clone_manager or CloneManager(pool)
         self._lease_manager = lease_manager or LeaseManager(
             pool,
             lease_ttl_sec=lease_ttl_sec,
@@ -186,8 +190,53 @@ class PipelineOrchestrator:
             finally:
                 self._active_pipelines.pop(pipeline_id, None)
 
+    async def _ensure_clone(self, pipeline_id: int) -> None:
+        """Ensure the pipeline has a working clone directory.
+
+        Spec lifecycle steps 1-2: Clone the repo to an isolated directory,
+        capture review_base_rev, and create pipeline support directories.
+        Skips cloning if clone_path is already set and the directory exists
+        (e.g., resumed pipeline after escalation).
+        """
+        async with self._pool.connection() as conn:
+            row: dict[str, Any] | None = await (  # type: ignore[assignment]
+                await conn.execute(
+                    "SELECT clone_path, repo_id FROM pipelines WHERE id = %s",
+                    (pipeline_id,),
+                )
+            ).fetchone()
+
+        if not row:
+            raise ValueError(f"Pipeline {pipeline_id} not found")
+
+        clone_path = row["clone_path"]
+        if clone_path and Path(clone_path).exists():
+            logger.debug(
+                "Pipeline %d already has clone at %s", pipeline_id, clone_path
+            )
+            return
+
+        if clone_path:
+            logger.warning(
+                "Pipeline %d clone_path set to %s but directory missing — re-cloning",
+                pipeline_id,
+                clone_path,
+            )
+
+        repo_id = row["repo_id"]
+        result = await self._clone_manager.create_clone(pipeline_id, repo_id)
+        self._log_buffer.append(
+            pipeline_id,
+            f"Clone created at {result.clone_path} "
+            f"(base_rev={result.review_base_rev[:8]})",
+        )
+
     async def _run_pipeline(self, pipeline_id: int, cancel_event: asyncio.Event) -> None:
-        """Main loop: acquire lease, walk the stage graph, handle transitions."""
+        """Main loop: clone repo, acquire lease, walk the stage graph, handle transitions."""
+        # Spec lifecycle steps 1-2: ensure clone exists
+        await self._ensure_clone(pipeline_id)
+
+        # Spec lifecycle step 3: acquire lease
         owner_token = await self._lease_manager.acquire_pipeline_lease(pipeline_id)
 
         heartbeat_task = asyncio.create_task(

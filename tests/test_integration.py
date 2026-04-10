@@ -227,6 +227,8 @@ async def _seed_full_pipeline(
     suffix: str = "",
 ) -> int:
     """Seed repo + pipeline_def + pipeline for integration testing. Returns pipeline_id."""
+    # Ensure clone directory exists so _ensure_clone skips re-cloning
+    Path(clone_path).mkdir(parents=True, exist_ok=True)
     async with pool.connection() as conn:
         repo_row = await (
             await conn.execute(

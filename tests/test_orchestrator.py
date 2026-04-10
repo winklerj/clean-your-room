@@ -11,11 +11,15 @@ import asyncio
 import json
 import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
+from unittest.mock import AsyncMock, MagicMock
+
+from build_your_room.clone_manager import CloneManager, CloneResult
 from build_your_room.db import get_pool
 from build_your_room.orchestrator import (
     STAGE_RESULT_APPROVED,
@@ -111,6 +115,8 @@ FULL_GRAPH_JSON = json.dumps(
 
 async def _seed_pipeline(pool, *, status: str = "pending", clone_path: str = "/tmp/test-clone"):
     """Insert a repo, pipeline_def, and pipeline for testing. Returns pipeline_id."""
+    # Ensure clone directory exists so _ensure_clone skips re-cloning
+    Path(clone_path).mkdir(parents=True, exist_ok=True)
     async with pool.connection() as conn:
         repo_row = await (
             await conn.execute(
@@ -893,6 +899,7 @@ class TestOrchestratorProperties:
             await conn.commit()
             pid = pipe_row["id"]
 
+        Path("/tmp/c").mkdir(parents=True, exist_ok=True)
         orch = PipelineOrchestrator(pool, LogBuffer())
         cancel = asyncio.Event()
         await orch._run_pipeline(pid, cancel)
@@ -913,3 +920,244 @@ class TestOrchestratorProperties:
         assert len(stages) == 5
         for s in stages:
             assert s["status"] == "skipped"  # no adapters registered
+
+
+# ---------------------------------------------------------------------------
+# CloneManager-orchestrator integration tests
+# ---------------------------------------------------------------------------
+
+
+class TestEnsureClone:
+    """Tests for _ensure_clone: clone lifecycle wiring in the orchestrator."""
+
+    async def test_skips_when_clone_exists(self, initialized_db, tmp_path):
+        """_ensure_clone skips create_clone when clone_path directory already exists.
+
+        Invariant: Existing clone directories are reused (e.g., resumed pipelines).
+        """
+        pool = get_pool()
+        clone_dir = tmp_path / "existing-clone"
+        clone_dir.mkdir()
+        pid = await _seed_pipeline(pool, clone_path=str(clone_dir))
+
+        mock_cm = MagicMock(spec=CloneManager)
+        mock_cm.create_clone = AsyncMock()
+        orch = PipelineOrchestrator(pool, LogBuffer(), clone_manager=mock_cm)
+
+        await orch._ensure_clone(pid)
+
+        mock_cm.create_clone.assert_not_called()
+
+    async def test_clones_when_clone_path_empty(self, initialized_db, tmp_path):
+        """_ensure_clone calls create_clone when clone_path is empty string.
+
+        Invariant: Fresh pipelines (clone_path='') trigger cloning.
+        """
+        pool = get_pool()
+        pid = await _seed_pipeline(pool, clone_path="")
+
+        clone_dir = tmp_path / "new-clone"
+        mock_cm = MagicMock(spec=CloneManager)
+        mock_cm.create_clone = AsyncMock(return_value=CloneResult(
+            clone_path=clone_dir, review_base_rev="abc12345def", workspace_ref=None,
+        ))
+        log_buffer = LogBuffer()
+        orch = PipelineOrchestrator(pool, log_buffer, clone_manager=mock_cm)
+
+        await orch._ensure_clone(pid)
+
+        mock_cm.create_clone.assert_awaited_once()
+        call_args = mock_cm.create_clone.call_args
+        assert call_args[0][0] == pid  # pipeline_id
+        # Verify the log message was emitted
+        assert any("Clone created" in msg for msg in log_buffer._history.get(pid, []))
+
+    async def test_reclones_when_directory_missing(self, initialized_db, tmp_path):
+        """_ensure_clone re-clones when clone_path is set but directory doesn't exist.
+
+        Invariant: Missing clone directories (e.g., manual deletion) are recovered.
+        """
+        import shutil
+
+        pool = get_pool()
+        missing_path = str(tmp_path / "gone-clone")
+        pid = await _seed_pipeline(pool, clone_path=missing_path)
+        # _seed_pipeline creates the directory; remove it to simulate manual deletion
+        shutil.rmtree(missing_path)
+
+        new_clone = tmp_path / "recloned"
+        mock_cm = MagicMock(spec=CloneManager)
+        mock_cm.create_clone = AsyncMock(return_value=CloneResult(
+            clone_path=new_clone, review_base_rev="def67890abc", workspace_ref=None,
+        ))
+        orch = PipelineOrchestrator(pool, LogBuffer(), clone_manager=mock_cm)
+
+        await orch._ensure_clone(pid)
+
+        mock_cm.create_clone.assert_awaited_once()
+
+    async def test_raises_when_pipeline_not_found(self, initialized_db):
+        """_ensure_clone raises ValueError for non-existent pipeline_id.
+
+        Invariant: Invalid pipeline IDs produce clear errors, not silent no-ops.
+        """
+        pool = get_pool()
+        orch = PipelineOrchestrator(pool, LogBuffer())
+
+        with pytest.raises(ValueError, match="not found"):
+            await orch._ensure_clone(99999)
+
+    async def test_clone_manager_injectable(self, initialized_db):
+        """PipelineOrchestrator accepts a custom CloneManager via constructor.
+
+        Invariant: Dependency injection for testing and configuration.
+        """
+        pool = get_pool()
+        mock_cm = MagicMock(spec=CloneManager)
+        orch = PipelineOrchestrator(pool, LogBuffer(), clone_manager=mock_cm)
+
+        assert orch._clone_manager is mock_cm
+
+    async def test_default_clone_manager_created(self, initialized_db):
+        """PipelineOrchestrator creates a default CloneManager when none provided.
+
+        Invariant: Production usage doesn't require explicit CloneManager.
+        """
+        pool = get_pool()
+        orch = PipelineOrchestrator(pool, LogBuffer())
+
+        assert isinstance(orch._clone_manager, CloneManager)
+
+    async def test_run_pipeline_calls_ensure_clone_before_lease(
+        self, initialized_db, tmp_path,
+    ):
+        """_run_pipeline calls _ensure_clone before acquiring the lease.
+
+        Invariant: Spec lifecycle order is clone -> lease -> stages.
+        """
+        pool = get_pool()
+        clone_dir = tmp_path / "clone"
+        clone_dir.mkdir()
+        pid = await _seed_pipeline(pool, clone_path=str(clone_dir))
+        log_buffer = LogBuffer()
+        orch = PipelineOrchestrator(pool, log_buffer)
+
+        call_order: list[str] = []
+        original_ensure = orch._ensure_clone
+        original_acquire = orch._lease_manager.acquire_pipeline_lease
+
+        async def tracked_ensure(pipeline_id: int) -> None:
+            call_order.append("ensure_clone")
+            await original_ensure(pipeline_id)
+
+        async def tracked_acquire(pipeline_id: int) -> str:
+            call_order.append("acquire_lease")
+            return await original_acquire(pipeline_id)
+
+        orch._ensure_clone = tracked_ensure  # type: ignore[assignment]
+        orch._lease_manager.acquire_pipeline_lease = tracked_acquire  # type: ignore[assignment]
+
+        cancel = asyncio.Event()
+        await orch._run_pipeline(pid, cancel)
+
+        assert call_order[0] == "ensure_clone"
+        assert call_order[1] == "acquire_lease"
+
+    async def test_clone_created_for_fresh_pipeline_end_to_end(
+        self, initialized_db, tmp_path,
+    ):
+        """Full pipeline lifecycle: fresh pipeline (clone_path='') gets cloned.
+
+        Invariant: The orchestrator creates a clone before running any stages.
+        """
+        pool = get_pool()
+        pid = await _seed_pipeline(pool, clone_path="")
+
+        clone_dir = tmp_path / "e2e-clone"
+        clone_dir.mkdir(parents=True, exist_ok=True)
+
+        async def fake_create_clone(
+            pipeline_id: int, repo_id: int, **kwargs: object,
+        ) -> CloneResult:
+            """Simulate real create_clone: update DB and return result."""
+            async with pool.connection() as conn:
+                await conn.execute(
+                    "UPDATE pipelines SET clone_path = %s, review_base_rev = 'abc12345' "
+                    "WHERE id = %s",
+                    (str(clone_dir), pipeline_id),
+                )
+                await conn.commit()
+            return CloneResult(
+                clone_path=clone_dir, review_base_rev="abc12345", workspace_ref=None,
+            )
+
+        mock_cm = MagicMock(spec=CloneManager)
+        mock_cm.create_clone = AsyncMock(side_effect=fake_create_clone)
+
+        log_buffer = LogBuffer()
+        orch = PipelineOrchestrator(pool, log_buffer, clone_manager=mock_cm)
+
+        cancel = asyncio.Event()
+        await orch._run_pipeline(pid, cancel)
+
+        mock_cm.create_clone.assert_awaited_once_with(pid, 1)  # repo_id=1
+
+        # Pipeline should have completed (no adapters = skipped stages)
+        async with pool.connection() as conn:
+            row: dict = await (  # type: ignore[assignment]
+                await conn.execute("SELECT status FROM pipelines WHERE id = %s", (pid,))
+            ).fetchone()
+        assert row["status"] == "completed"
+
+    @settings(
+        max_examples=5,
+        deadline=None,
+        suppress_health_check=[HealthCheck.function_scoped_fixture],
+    )
+    @given(data=st.data())
+    @pytest.mark.asyncio
+    async def test_pbt_ensure_clone_idempotent_when_exists(
+        self, initialized_db, data, tmp_path,
+    ) -> None:
+        """Property: calling _ensure_clone multiple times on an existing clone is a no-op.
+
+        Invariant: Idempotency — repeated calls with existing directory don't trigger cloning.
+        """
+        pool = get_pool()
+        clone_dir = tmp_path / f"pbt-{uuid.uuid4().hex[:6]}"
+        clone_dir.mkdir()
+        suffix = uuid.uuid4().hex[:8]
+        async with pool.connection() as conn:
+            repo_row = await (
+                await conn.execute(
+                    "INSERT INTO repos (name, local_path) VALUES (%s, '/tmp/r') RETURNING id",
+                    (f"repo-ec-{suffix}",),
+                )
+            ).fetchone()
+            pdef_row = await (
+                await conn.execute(
+                    "INSERT INTO pipeline_defs (name, stage_graph_json) "
+                    "VALUES (%s, %s) RETURNING id",
+                    (f"def-ec-{suffix}", FULL_GRAPH_JSON),
+                )
+            ).fetchone()
+            pipe_row = await (
+                await conn.execute(
+                    "INSERT INTO pipelines (pipeline_def_id, repo_id, clone_path, "
+                    "review_base_rev, status) VALUES (%s, %s, %s, 'abc', 'pending') "
+                    "RETURNING id",
+                    (pdef_row["id"], repo_row["id"], str(clone_dir)),
+                )
+            ).fetchone()
+            await conn.commit()
+            pid = pipe_row["id"]
+
+        n_calls = data.draw(st.integers(min_value=1, max_value=5))
+        mock_cm = MagicMock(spec=CloneManager)
+        mock_cm.create_clone = AsyncMock()
+        orch = PipelineOrchestrator(pool, LogBuffer(), clone_manager=mock_cm)
+
+        for _ in range(n_calls):
+            await orch._ensure_clone(pid)
+
+        mock_cm.create_clone.assert_not_called()
