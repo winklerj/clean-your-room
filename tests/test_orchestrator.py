@@ -1,15 +1,30 @@
-"""Tests for PipelineOrchestrator — leases, reconciliation, stage dispatch."""
+"""Tests for PipelineOrchestrator — leases, reconciliation, stage dispatch.
+
+Property-based tests verify orchestrator state machine invariants across
+generated inputs: visit count persistence, lease exclusivity, default
+stage results, and pipeline status transitions.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import json
+import uuid
 from datetime import datetime, timedelta, timezone
 
 import pytest
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 
 from build_your_room.db import get_pool
-from build_your_room.orchestrator import PipelineOrchestrator
+from build_your_room.orchestrator import (
+    STAGE_RESULT_APPROVED,
+    STAGE_RESULT_ESCALATED,
+    STAGE_RESULT_STAGE_COMPLETE,
+    STAGE_RESULT_VALIDATED,
+    STAGE_RESULT_VALIDATION_FAILED,
+    PipelineOrchestrator,
+)
 from build_your_room.streaming import LogBuffer
 
 # ---------------------------------------------------------------------------
@@ -576,3 +591,327 @@ class TestPipelineLifecycle:
                 await conn.execute("SELECT status FROM pipelines WHERE id = %s", (pid,))
             ).fetchone()
         assert row["status"] == "killed"
+
+
+# ---------------------------------------------------------------------------
+# Strategies for property-based tests
+# ---------------------------------------------------------------------------
+
+_stage_types = st.sampled_from(
+    ["spec_author", "impl_plan", "impl_task", "code_review", "validation"]
+)
+
+_visit_count_keys = st.from_regex(r"[a-z][a-z0-9_]{1,20}", fullmatch=True)
+
+_valid_results = [
+    STAGE_RESULT_APPROVED,
+    STAGE_RESULT_STAGE_COMPLETE,
+    STAGE_RESULT_VALIDATION_FAILED,
+    STAGE_RESULT_VALIDATED,
+    STAGE_RESULT_ESCALATED,
+]
+
+_pipeline_statuses = st.sampled_from(
+    ["pending", "running", "paused", "cancel_requested", "cancelled",
+     "killed", "completed", "failed", "needs_attention"]
+)
+
+
+# ---------------------------------------------------------------------------
+# Property-based tests
+# ---------------------------------------------------------------------------
+
+
+class TestOrchestratorProperties:
+    """Property-based tests for orchestrator state machine invariants."""
+
+    @settings(max_examples=50)
+    @given(
+        visit_counts=st.dictionaries(
+            keys=_visit_count_keys,
+            values=st.integers(min_value=0, max_value=100),
+            min_size=0,
+            max_size=15,
+        ),
+    )
+    def test_visit_counts_json_roundtrip(self, visit_counts) -> None:
+        """Property: visit counts survive JSON serialization roundtrip.
+
+        Invariant: _load_visit_counts(json.dumps({"visit_counts": vc})) == vc
+        for all valid visit count dicts.
+        """
+        recovery_json = json.dumps({"visit_counts": visit_counts})
+        pipeline = {"recovery_state_json": recovery_json}
+        loaded = PipelineOrchestrator._load_visit_counts(pipeline)
+        assert loaded == visit_counts
+
+    @settings(max_examples=30)
+    @given(
+        recovery_json=st.one_of(
+            st.none(),
+            st.just(""),
+            st.just("not-json"),
+            st.just("null"),
+            st.just('{"other_key": 42}'),
+        ),
+    )
+    def test_visit_counts_graceful_on_invalid_json(self, recovery_json) -> None:
+        """Property: _load_visit_counts returns empty dict for missing/invalid data.
+
+        Invariant: never raises, always returns dict (possibly empty).
+        """
+        pipeline = {"recovery_state_json": recovery_json}
+        loaded = PipelineOrchestrator._load_visit_counts(pipeline)
+        assert isinstance(loaded, dict)
+
+    @settings(max_examples=50)
+    @given(stage_type=st.text(min_size=1, max_size=30, alphabet="abcdefghijklmnopqrstuvwxyz_"))
+    def test_default_stage_result_always_returns_string(self, stage_type) -> None:
+        """Property: _default_stage_result always returns a non-empty string.
+
+        Invariant: for all stage type strings, result is a valid stage result.
+        """
+        result = PipelineOrchestrator._default_stage_result(stage_type)
+        assert isinstance(result, str)
+        assert len(result) > 0
+        assert result in _valid_results
+
+    @settings(max_examples=30)
+    @given(stage_type=_stage_types)
+    def test_known_stage_types_have_specific_results(self, stage_type) -> None:
+        """Property: known stage types always map to their expected result.
+
+        Invariant: the mapping is deterministic and total for known types.
+        """
+        result = PipelineOrchestrator._default_stage_result(stage_type)
+        expected = {
+            "spec_author": STAGE_RESULT_APPROVED,
+            "impl_plan": STAGE_RESULT_APPROVED,
+            "impl_task": STAGE_RESULT_STAGE_COMPLETE,
+            "code_review": STAGE_RESULT_APPROVED,
+            "validation": STAGE_RESULT_VALIDATED,
+        }
+        assert result == expected[stage_type]
+
+    @settings(
+        max_examples=10,
+        deadline=None,
+        suppress_health_check=[HealthCheck.function_scoped_fixture],
+    )
+    @given(data=st.data())
+    @pytest.mark.asyncio
+    async def test_lease_acquire_release_reacquire_cycle(self, initialized_db, data) -> None:
+        """Property: acquire → release → reacquire always succeeds.
+
+        Invariant: a released lease can always be re-acquired by any process.
+        """
+        pool = get_pool()
+        suffix = uuid.uuid4().hex[:8]
+        async with pool.connection() as conn:
+            repo_row = await (
+                await conn.execute(
+                    "INSERT INTO repos (name, local_path) VALUES (%s, '/tmp/r') RETURNING id",
+                    (f"repo-{suffix}",),
+                )
+            ).fetchone()
+            pdef_row = await (
+                await conn.execute(
+                    "INSERT INTO pipeline_defs (name, stage_graph_json) "
+                    "VALUES (%s, %s) RETURNING id",
+                    (f"def-{suffix}", FULL_GRAPH_JSON),
+                )
+            ).fetchone()
+            pipe_row = await (
+                await conn.execute(
+                    "INSERT INTO pipelines (pipeline_def_id, repo_id, clone_path, "
+                    "review_base_rev, status) VALUES (%s, %s, '/tmp/c', 'abc', 'pending') "
+                    "RETURNING id",
+                    (pdef_row["id"], repo_row["id"]),
+                )
+            ).fetchone()
+            await conn.commit()
+            pid = pipe_row["id"]
+
+        orch = PipelineOrchestrator(pool, LogBuffer())
+
+        # Cycle N times
+        cycles = data.draw(st.integers(min_value=1, max_value=3))
+        for _ in range(cycles):
+            token = await orch._acquire_pipeline_lease(pid)
+            assert token
+            await orch._release_pipeline_lease(pid)
+
+        # Final acquire should work
+        final_token = await orch._acquire_pipeline_lease(pid)
+        assert final_token
+
+    @settings(
+        max_examples=10,
+        deadline=None,
+        suppress_health_check=[HealthCheck.function_scoped_fixture],
+    )
+    @given(data=st.data())
+    @pytest.mark.asyncio
+    async def test_lease_exclusivity(self, initialized_db, data) -> None:
+        """Property: two concurrent lease acquisitions cannot both succeed.
+
+        Invariant: RunningImpliesOwner — at most one owner at a time.
+        """
+        pool = get_pool()
+        suffix = uuid.uuid4().hex[:8]
+        async with pool.connection() as conn:
+            repo_row = await (
+                await conn.execute(
+                    "INSERT INTO repos (name, local_path) VALUES (%s, '/tmp/r') RETURNING id",
+                    (f"repo-exc-{suffix}",),
+                )
+            ).fetchone()
+            pdef_row = await (
+                await conn.execute(
+                    "INSERT INTO pipeline_defs (name, stage_graph_json) "
+                    "VALUES (%s, %s) RETURNING id",
+                    (f"def-exc-{suffix}", FULL_GRAPH_JSON),
+                )
+            ).fetchone()
+            pipe_row = await (
+                await conn.execute(
+                    "INSERT INTO pipelines (pipeline_def_id, repo_id, clone_path, "
+                    "review_base_rev, status) VALUES (%s, %s, '/tmp/c', 'abc', 'pending') "
+                    "RETURNING id",
+                    (pdef_row["id"], repo_row["id"]),
+                )
+            ).fetchone()
+            await conn.commit()
+            pid = pipe_row["id"]
+
+        orch = PipelineOrchestrator(pool, LogBuffer())
+        token1 = await orch._acquire_pipeline_lease(pid)
+        assert token1
+
+        with pytest.raises(RuntimeError, match="another owner"):
+            await orch._acquire_pipeline_lease(pid)
+
+    @settings(
+        max_examples=8,
+        deadline=None,
+        suppress_health_check=[HealthCheck.function_scoped_fixture],
+    )
+    @given(
+        n_expired=st.integers(min_value=1, max_value=3),
+    )
+    @pytest.mark.asyncio
+    async def test_reconciliation_downgrades_all_expired(
+        self, initialized_db, n_expired
+    ) -> None:
+        """Property: all pipelines with expired leases are downgraded during reconciliation.
+
+        Invariant: after reconcile_running_state(), no pipeline has status='running'
+        with an expired lease.
+        """
+        pool = get_pool()
+        past = datetime.now(timezone.utc) - timedelta(seconds=60)
+        pids = []
+
+        for i in range(n_expired):
+            suffix = uuid.uuid4().hex[:8]
+            async with pool.connection() as conn:
+                repo_row = await (
+                    await conn.execute(
+                        "INSERT INTO repos (name, local_path) VALUES (%s, '/tmp/r') RETURNING id",
+                        (f"repo-rec-{suffix}",),
+                    )
+                ).fetchone()
+                pdef_row = await (
+                    await conn.execute(
+                        "INSERT INTO pipeline_defs (name, stage_graph_json) "
+                        "VALUES (%s, %s) RETURNING id",
+                        (f"def-rec-{suffix}", FULL_GRAPH_JSON),
+                    )
+                ).fetchone()
+                pipe_row = await (
+                    await conn.execute(
+                        "INSERT INTO pipelines (pipeline_def_id, repo_id, clone_path, "
+                        "review_base_rev, status, owner_token, lease_expires_at) "
+                        "VALUES (%s, %s, '/tmp/c', 'abc', 'running', 'old', %s) "
+                        "RETURNING id",
+                        (pdef_row["id"], repo_row["id"], past),
+                    )
+                ).fetchone()
+                await conn.commit()
+                pids.append(pipe_row["id"])
+
+        orch = PipelineOrchestrator(pool, LogBuffer())
+        await orch.reconcile_running_state()
+
+        async with pool.connection() as conn:
+            for pid in pids:
+                row = await (
+                    await conn.execute(
+                        "SELECT status, owner_token FROM pipelines WHERE id = %s", (pid,)
+                    )
+                ).fetchone()
+                assert row["status"] == "needs_attention", (
+                    f"Pipeline {pid} should be downgraded but is {row['status']}"
+                )
+                assert row["owner_token"] is None
+
+    @settings(
+        max_examples=10,
+        deadline=None,
+        suppress_health_check=[HealthCheck.function_scoped_fixture],
+    )
+    @given(data=st.data())
+    @pytest.mark.asyncio
+    async def test_completed_pipeline_has_all_stage_rows(self, initialized_db, data) -> None:
+        """Property: a completed pipeline run has exactly one stage row per graph node.
+
+        Invariant: after _run_pipeline completes, pipeline_stages contains one row
+        per stage in the happy path, all with status='skipped' (no adapters).
+        """
+        pool = get_pool()
+        suffix = uuid.uuid4().hex[:8]
+        async with pool.connection() as conn:
+            repo_row = await (
+                await conn.execute(
+                    "INSERT INTO repos (name, local_path) VALUES (%s, '/tmp/r') RETURNING id",
+                    (f"repo-comp-{suffix}",),
+                )
+            ).fetchone()
+            pdef_row = await (
+                await conn.execute(
+                    "INSERT INTO pipeline_defs (name, stage_graph_json) "
+                    "VALUES (%s, %s) RETURNING id",
+                    (f"def-comp-{suffix}", FULL_GRAPH_JSON),
+                )
+            ).fetchone()
+            pipe_row = await (
+                await conn.execute(
+                    "INSERT INTO pipelines (pipeline_def_id, repo_id, clone_path, "
+                    "review_base_rev, status) VALUES (%s, %s, '/tmp/c', 'abc', 'pending') "
+                    "RETURNING id",
+                    (pdef_row["id"], repo_row["id"]),
+                )
+            ).fetchone()
+            await conn.commit()
+            pid = pipe_row["id"]
+
+        orch = PipelineOrchestrator(pool, LogBuffer())
+        cancel = asyncio.Event()
+        await orch._run_pipeline(pid, cancel)
+
+        async with pool.connection() as conn:
+            row = await (
+                await conn.execute("SELECT status FROM pipelines WHERE id = %s", (pid,))
+            ).fetchone()
+            stages = await (
+                await conn.execute(
+                    "SELECT stage_key, status FROM pipeline_stages "
+                    "WHERE pipeline_id = %s ORDER BY id",
+                    (pid,),
+                )
+            ).fetchall()
+
+        assert row["status"] == "completed"
+        assert len(stages) == 5
+        for s in stages:
+            assert s["status"] == "skipped"  # no adapters registered

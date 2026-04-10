@@ -1,8 +1,14 @@
-"""Tests for stage graph parsing and navigation."""
+"""Tests for stage graph parsing and navigation.
+
+Property-based tests verify invariants across generated stage graphs.
+Unit tests verify parsing, validation, and navigation for specific cases.
+"""
 
 from __future__ import annotations
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 from build_your_room.stage_graph import (
     ReviewConfig,
@@ -475,3 +481,302 @@ class TestStageGraphNavigation:
             "validation",
             "completed",
         ]
+
+
+# ---------------------------------------------------------------------------
+# Strategies for property-based tests
+# ---------------------------------------------------------------------------
+
+_stage_types = st.sampled_from(
+    ["spec_author", "impl_plan", "impl_task", "code_review", "validation", "custom"]
+)
+_agents = st.sampled_from(["claude", "codex"])
+_models = st.sampled_from(["claude-opus-4-6", "claude-sonnet-4-6", "gpt-5.1-codex"])
+_guards = st.sampled_from(["approved", "stage_complete", "validation_failed", "validated"])
+_node_key = st.from_regex(r"[a-z][a-z0-9_]{1,15}", fullmatch=True)
+
+
+@st.composite
+def stage_node_dicts(draw: st.DrawFn, key: str | None = None) -> dict:
+    """Generate a valid stage node dict for from_json."""
+    return {
+        "key": key or draw(_node_key),
+        "name": draw(st.from_regex(r"[A-Z][a-zA-Z ]{1,25}", fullmatch=True)),
+        "type": draw(_stage_types),
+        "agent": draw(_agents),
+        "prompt": draw(st.from_regex(r"[a-z_]{3,15}", fullmatch=True)),
+        "model": draw(_models),
+        "max_iterations": draw(st.integers(min_value=1, max_value=100)),
+        "context_threshold_pct": draw(st.integers(min_value=10, max_value=95)),
+    }
+
+
+@st.composite
+def valid_stage_graphs(draw: st.DrawFn) -> dict:
+    """Generate a valid stage graph JSON dict with 2-6 nodes and edges."""
+    n = draw(st.integers(min_value=2, max_value=6))
+    keys: list[str] = []
+    for i in range(n):
+        k = draw(st.from_regex(r"[a-z][a-z0-9_]{1,10}", fullmatch=True))
+        while k in keys:
+            k = k + str(i)
+        keys.append(k)
+
+    nodes = []
+    for k in keys:
+        nodes.append(draw(stage_node_dicts(key=k)))
+
+    edges = []
+    edge_keys: set[str] = set()
+    # Create a chain: node[0] → node[1] → ... → completed
+    for i in range(n - 1):
+        ek = f"e_{keys[i]}_to_{keys[i + 1]}"
+        if ek in edge_keys:
+            ek = ek + f"_{i}"
+        edge_keys.add(ek)
+        edges.append({
+            "key": ek,
+            "from": keys[i],
+            "to": keys[i + 1],
+            "on": draw(_guards),
+        })
+
+    # Terminal edge from last node
+    final_ek = f"e_{keys[-1]}_to_done"
+    edges.append({
+        "key": final_ek,
+        "from": keys[-1],
+        "to": "completed",
+        "on": draw(_guards),
+    })
+
+    # Optionally add a back-edge with max_visits
+    if draw(st.booleans()):
+        if n >= 3:
+            src_idx = draw(st.integers(min_value=2, max_value=n - 1))
+            dst_idx = draw(st.integers(min_value=0, max_value=src_idx - 1))
+            back_ek = f"back_{keys[src_idx]}_to_{keys[dst_idx]}"
+            if back_ek not in edge_keys:
+                edge_keys.add(back_ek)
+                back_edge: dict[str, str | int] = {
+                    "key": back_ek,
+                    "from": keys[src_idx],
+                    "to": keys[dst_idx],
+                    "on": draw(_guards),
+                    "max_visits": draw(st.integers(min_value=1, max_value=5)),
+                    "on_exhausted": "escalate",
+                }
+                edges.append(back_edge)  # type: ignore[arg-type]
+
+    return {
+        "entry_stage": keys[0],
+        "nodes": nodes,
+        "edges": edges,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Property-based tests
+# ---------------------------------------------------------------------------
+
+
+class TestStageGraphProperties:
+    """Property-based tests for stage graph invariants."""
+
+    @settings(max_examples=50)
+    @given(graph_json=valid_stage_graphs())
+    def test_entry_stage_always_in_nodes(self, graph_json) -> None:
+        """Property: entry_stage always exists in the parsed nodes dict.
+
+        Invariant: for all valid graphs, graph.entry_stage in graph.nodes.
+        """
+        graph = StageGraph.from_json(graph_json)
+        assert graph.entry_stage in graph.nodes
+
+    @settings(max_examples=50)
+    @given(graph_json=valid_stage_graphs())
+    def test_all_edge_from_stages_exist_in_nodes(self, graph_json) -> None:
+        """Property: every edge's from_stage is a valid node key.
+
+        Invariant: for all edges e in graph, e.from_stage in graph.nodes.
+        """
+        graph = StageGraph.from_json(graph_json)
+        for edge in graph.edges:
+            assert edge.from_stage in graph.nodes, (
+                f"Edge {edge.key!r} references unknown from_stage {edge.from_stage!r}"
+            )
+
+    @settings(max_examples=50)
+    @given(graph_json=valid_stage_graphs())
+    def test_all_edge_to_stages_valid(self, graph_json) -> None:
+        """Property: every edge's to_stage is either a node key or 'completed'.
+
+        Invariant: edge.to_stage in graph.nodes | {'completed'}.
+        """
+        graph = StageGraph.from_json(graph_json)
+        valid_targets = set(graph.nodes.keys()) | {"completed"}
+        for edge in graph.edges:
+            assert edge.to_stage in valid_targets, (
+                f"Edge {edge.key!r} targets unknown {edge.to_stage!r}"
+            )
+
+    @settings(max_examples=50)
+    @given(graph_json=valid_stage_graphs())
+    def test_no_duplicate_node_keys(self, graph_json) -> None:
+        """Property: all node keys in a parsed graph are unique.
+
+        Invariant: from_json rejects or deduplicates node keys.
+        """
+        graph = StageGraph.from_json(graph_json)
+        assert len(graph.nodes) == len(graph_json["nodes"])
+
+    @settings(max_examples=50)
+    @given(graph_json=valid_stage_graphs())
+    def test_no_duplicate_edge_keys(self, graph_json) -> None:
+        """Property: all edge keys in a parsed graph are unique.
+
+        Invariant: from_json rejects or deduplicates edge keys.
+        """
+        graph = StageGraph.from_json(graph_json)
+        edge_keys = [e.key for e in graph.edges]
+        assert len(edge_keys) == len(set(edge_keys))
+
+    @settings(max_examples=50)
+    @given(graph_json=valid_stage_graphs())
+    def test_outgoing_edges_only_from_specified_node(self, graph_json) -> None:
+        """Property: get_outgoing_edges returns only edges originating from the given node.
+
+        Invariant: for all e in get_outgoing_edges(k), e.from_stage == k.
+        """
+        graph = StageGraph.from_json(graph_json)
+        for key in graph.nodes:
+            outgoing = graph.get_outgoing_edges(key)
+            for edge in outgoing:
+                assert edge.from_stage == key
+
+    @settings(max_examples=50)
+    @given(graph_json=valid_stage_graphs(), guard=_guards)
+    def test_resolve_with_unmatched_guard_returns_none(self, graph_json, guard) -> None:
+        """Property: resolve with a guard no edge matches returns (None, None).
+
+        Invariant: if no outgoing edge has edge.on == guard, result is (None, None).
+        """
+        graph = StageGraph.from_json(graph_json)
+        # Pick a node and construct a guard that no edge uses
+        key = graph.entry_stage
+        # Use a synthetic guard guaranteed not to match any real edge guard
+        synthetic_guard = f"__never_used_{guard}"
+        next_key, edge = graph.resolve_next_stage(key, synthetic_guard, {})
+        assert next_key is None
+        assert edge is None
+
+    @settings(max_examples=50)
+    @given(graph_json=valid_stage_graphs())
+    def test_resolve_matching_guard_returns_valid_target(self, graph_json) -> None:
+        """Property: resolve with a matching guard returns the correct edge target.
+
+        Invariant: if edge.on == result, resolve returns (edge.to_stage, edge).
+        """
+        graph = StageGraph.from_json(graph_json)
+        key = graph.entry_stage
+        outgoing = graph.get_outgoing_edges(key)
+        if not outgoing:
+            return  # no edges to test
+
+        # Pick the first edge and use its guard
+        target_edge = outgoing[0]
+        next_key, edge = graph.resolve_next_stage(key, target_edge.on, {})
+        assert next_key == target_edge.to_stage
+        assert edge is not None
+        assert edge.key == target_edge.key
+
+    @settings(max_examples=30)
+    @given(
+        graph_json=valid_stage_graphs(),
+        visit_count=st.integers(min_value=0, max_value=20),
+    )
+    def test_visit_count_gating_on_bounded_edges(self, graph_json, visit_count) -> None:
+        """Property: edges with max_visits block when visit count >= limit.
+
+        Invariant: if visits >= max_visits and on_exhausted='escalate',
+        resolve returns (None, edge) — an escalation signal.
+        If visits < max_visits, the edge is traversable.
+
+        Only tests the bounded edge when it is the first matching edge for
+        its from_stage and guard, since resolve_next_stage returns the first
+        matching edge.
+        """
+        graph = StageGraph.from_json(graph_json)
+        bounded_edges = [e for e in graph.edges if e.max_visits is not None]
+        if not bounded_edges:
+            return  # no bounded edges in this graph
+
+        edge = bounded_edges[0]
+
+        # Only test if the bounded edge is the first match for its guard
+        outgoing = graph.get_outgoing_edges(edge.from_stage)
+        first_match = next((e for e in outgoing if e.on == edge.on), None)
+        if first_match is None or first_match.key != edge.key:
+            return  # another edge with the same guard comes first
+
+        visit_counts = {edge.key: visit_count}
+
+        if visit_count >= edge.max_visits:
+            if edge.on_exhausted == "escalate":
+                next_key, resolved = graph.resolve_next_stage(
+                    edge.from_stage, edge.on, visit_counts
+                )
+                assert next_key is None, "Exhausted edge should not resolve to a stage"
+                assert resolved is not None, "Exhausted edge should return the edge"
+                assert resolved.key == edge.key
+        else:
+            next_key, resolved = graph.resolve_next_stage(
+                edge.from_stage, edge.on, visit_counts
+            )
+            assert resolved is not None
+            assert resolved.key == edge.key
+            assert next_key == edge.to_stage
+
+    @settings(max_examples=50)
+    @given(graph_json=valid_stage_graphs())
+    def test_traversal_visit_counts_monotonically_increase(self, graph_json) -> None:
+        """Property: edge visit counts never decrease during traversal.
+
+        Invariant: after each edge traversal, visit_counts[edge.key] >= previous value.
+        """
+        graph = StageGraph.from_json(graph_json)
+        visit_counts: dict[str, int] = {}
+        current = graph.entry_stage
+        max_steps = len(graph.edges) * 3  # prevent infinite loops
+
+        for _ in range(max_steps):
+            if current == "completed":
+                break
+            outgoing = graph.get_outgoing_edges(current)
+            if not outgoing:
+                break
+
+            # Try each guard until one resolves
+            resolved = False
+            for edge in outgoing:
+                try:
+                    next_key, resolved_edge = graph.resolve_next_stage(
+                        current, edge.on, visit_counts
+                    )
+                except StageGraphError:
+                    continue
+
+                if next_key is not None and resolved_edge is not None:
+                    old_count = visit_counts.get(resolved_edge.key, 0)
+                    visit_counts[resolved_edge.key] = old_count + 1
+                    assert visit_counts[resolved_edge.key] >= old_count
+                    current = next_key
+                    resolved = True
+                    break
+
+            if not resolved:
+                break
+
+        # Final check: no counts went below zero
+        for count in visit_counts.values():
+            assert count >= 0

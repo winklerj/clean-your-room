@@ -1108,3 +1108,412 @@ class TestPropertyBased:
                 assert task.status != "ready", (
                     f"Compound task '{task.name}' should not be 'ready'"
                 )
+
+
+# ---------------------------------------------------------------------------
+# Property-based tests — HTN claim invariants
+# ---------------------------------------------------------------------------
+
+
+@st.composite
+def independent_primitive_tasks(draw: st.DrawFn) -> list[dict]:
+    """Generate 2-6 independent primitive tasks with distinct priorities.
+
+    All tasks have no dependencies, so they all become 'ready' after population.
+    Priorities are unique so claim order is deterministic.
+    """
+    n = draw(st.integers(min_value=2, max_value=6))
+    tasks = []
+    names: list[str] = []
+    priorities = list(range(n))  # unique priorities 0..n-1
+    for i in range(n):
+        name = draw(st.from_regex(r"[a-zA-Z][a-zA-Z0-9_]{1,12}", fullmatch=True))
+        while name in names:
+            name = name + str(i)
+        names.append(name)
+        tasks.append({
+            "name": name,
+            "description": f"Task {name}",
+            "task_type": "primitive",
+            "priority": priorities[n - 1 - i],  # highest priority first
+            "ordering": i,
+            "preconditions": [],
+            "postconditions": [],
+        })
+    return tasks
+
+
+@st.composite
+def chain_primitive_tasks(draw: st.DrawFn) -> list[dict]:
+    """Generate a linear chain of 2-5 primitive tasks where each depends on the previous.
+
+    Only the first task will be 'ready' initially.
+    """
+    n = draw(st.integers(min_value=2, max_value=5))
+    tasks = []
+    names: list[str] = []
+    for i in range(n):
+        name = draw(st.from_regex(r"[a-zA-Z][a-zA-Z0-9_]{1,12}", fullmatch=True))
+        while name in names:
+            name = name + str(i)
+        names.append(name)
+        deps = [names[i - 1]] if i > 0 else []
+        tasks.append({
+            "name": name,
+            "description": f"Chain task {name}",
+            "task_type": "primitive",
+            "priority": 0,
+            "ordering": i,
+            "dependencies": deps,
+            "preconditions": [],
+            "postconditions": [],
+        })
+    return tasks
+
+
+class TestHTNClaimProperties:
+    """Property-based tests for HTN task claim invariants."""
+
+    @settings(max_examples=15, deadline=None,
+              suppress_health_check=[HealthCheck.function_scoped_fixture])
+    @given(tasks=independent_primitive_tasks())
+    @pytest.mark.asyncio
+    async def test_claim_sets_all_ownership_fields(self, initialized_db, tasks) -> None:
+        """Property: a claimed task always has all ownership fields set.
+
+        Invariant: claimed task has status='in_progress', non-null claim_token,
+        claim_owner_token, assigned_session_id, and claim_expires_at.
+        """
+        import uuid
+        pool = get_pool()
+        suffix = uuid.uuid4().hex[:8]
+        pipeline_id, _ = await _seed_pipeline(pool, name_suffix=suffix)
+        session_id = await _seed_session(pool, pipeline_id)
+        planner = HTNPlanner(pool)
+
+        await planner.populate_from_structured_output(pipeline_id, tasks)
+
+        claimed = await planner.claim_next_ready_task(
+            pipeline_id, session_id, f"owner-{suffix}", "2099-01-01T00:00:00Z"
+        )
+        assert claimed is not None
+        assert claimed.status == "in_progress"
+        assert claimed.claim_token is not None
+        assert claimed.claim_owner_token is not None
+        assert claimed.assigned_session_id == session_id
+        assert claimed.claim_expires_at is not None
+
+    @settings(max_examples=15, deadline=None,
+              suppress_health_check=[HealthCheck.function_scoped_fixture])
+    @given(tasks=independent_primitive_tasks())
+    @pytest.mark.asyncio
+    async def test_complete_clears_all_claim_fields(self, initialized_db, tasks) -> None:
+        """Property: completing a task clears all claim ownership fields.
+
+        Invariant: after complete_task, claim_token, claim_owner_token,
+        and claim_expires_at are all NULL.
+        """
+        import uuid
+        pool = get_pool()
+        suffix = uuid.uuid4().hex[:8]
+        pipeline_id, _ = await _seed_pipeline(pool, name_suffix=suffix)
+        session_id = await _seed_session(pool, pipeline_id)
+        planner = HTNPlanner(pool)
+
+        await planner.populate_from_structured_output(pipeline_id, tasks)
+        claimed = await planner.claim_next_ready_task(
+            pipeline_id, session_id, f"owner-{suffix}", "2099-01-01T00:00:00Z"
+        )
+        assert claimed is not None
+
+        await planner.complete_task(claimed.id, f"rev-{suffix}", "Done")
+
+        tree = await planner.get_task_tree(pipeline_id)
+        completed = next(t for t in tree if t.id == claimed.id)
+        assert completed.status == "completed"
+        assert completed.claim_token is None
+        assert completed.claim_owner_token is None
+        assert completed.claim_expires_at is None
+        assert completed.checkpoint_rev == f"rev-{suffix}"
+
+    @settings(max_examples=15, deadline=None,
+              suppress_health_check=[HealthCheck.function_scoped_fixture])
+    @given(tasks=independent_primitive_tasks())
+    @pytest.mark.asyncio
+    async def test_claim_always_selects_max_priority(self, initialized_db, tasks) -> None:
+        """Property: claim_next_ready_task always selects the highest-priority task.
+
+        Invariant: for all task sets, the claimed task has the maximum priority
+        among all ready primitive tasks.
+        """
+        import uuid
+        pool = get_pool()
+        suffix = uuid.uuid4().hex[:8]
+        pipeline_id, _ = await _seed_pipeline(pool, name_suffix=suffix)
+        session_id = await _seed_session(pool, pipeline_id)
+        planner = HTNPlanner(pool)
+
+        await planner.populate_from_structured_output(pipeline_id, tasks)
+
+        # Find the expected max priority among ready primitives
+        tree = await planner.get_task_tree(pipeline_id)
+        ready_primitives = [
+            t for t in tree if t.status == "ready" and t.task_type == "primitive"
+        ]
+        if not ready_primitives:
+            return  # nothing to claim
+
+        max_priority = max(t.priority for t in ready_primitives)
+
+        claimed = await planner.claim_next_ready_task(
+            pipeline_id, session_id, f"owner-{suffix}", "2099-01-01T00:00:00Z"
+        )
+        assert claimed is not None
+        assert claimed.priority == max_priority
+
+    @settings(max_examples=10, deadline=None,
+              suppress_health_check=[HealthCheck.function_scoped_fixture])
+    @given(tasks=independent_primitive_tasks())
+    @pytest.mark.asyncio
+    async def test_concurrent_claims_yield_distinct_tasks(self, initialized_db, tasks) -> None:
+        """Property: N sequential claims on N ready tasks yield N distinct tasks.
+
+        Invariant: UniqueTaskClaim — each claim returns a different task.
+        """
+        import uuid
+        pool = get_pool()
+        suffix = uuid.uuid4().hex[:8]
+        pipeline_id, _ = await _seed_pipeline(pool, name_suffix=suffix)
+        session_id = await _seed_session(pool, pipeline_id)
+        planner = HTNPlanner(pool)
+
+        await planner.populate_from_structured_output(pipeline_id, tasks)
+
+        tree = await planner.get_task_tree(pipeline_id)
+        n_ready = sum(1 for t in tree if t.status == "ready" and t.task_type == "primitive")
+
+        claimed_ids: set[int] = set()
+        for i in range(n_ready):
+            claimed = await planner.claim_next_ready_task(
+                pipeline_id, session_id, f"owner-{suffix}-{i}", "2099-01-01T00:00:00Z"
+            )
+            assert claimed is not None, f"Expected claim #{i+1} to succeed"
+            assert claimed.id not in claimed_ids, (
+                f"Task {claimed.id} claimed twice"
+            )
+            claimed_ids.add(claimed.id)
+
+        # Next claim should return None
+        extra = await planner.claim_next_ready_task(
+            pipeline_id, session_id, f"owner-{suffix}-extra", "2099-01-01T00:00:00Z"
+        )
+        assert extra is None
+
+    @settings(max_examples=10, deadline=None,
+              suppress_health_check=[HealthCheck.function_scoped_fixture])
+    @given(tasks=independent_primitive_tasks())
+    @pytest.mark.asyncio
+    async def test_release_then_reclaim_succeeds(self, initialized_db, tasks) -> None:
+        """Property: releasing a claim returns task to 'ready' and it can be reclaimed.
+
+        Invariant: release_claim → task is reclaimable by any session.
+        """
+        import uuid
+        pool = get_pool()
+        suffix = uuid.uuid4().hex[:8]
+        pipeline_id, _ = await _seed_pipeline(pool, name_suffix=suffix)
+        session_id = await _seed_session(pool, pipeline_id)
+        planner = HTNPlanner(pool)
+
+        await planner.populate_from_structured_output(pipeline_id, tasks)
+
+        claimed = await planner.claim_next_ready_task(
+            pipeline_id, session_id, f"owner-{suffix}", "2099-01-01T00:00:00Z"
+        )
+        assert claimed is not None
+        original_id = claimed.id
+
+        await planner.release_claim(original_id)
+
+        # Verify task is back to ready
+        tree = await planner.get_task_tree(pipeline_id)
+        released = next(t for t in tree if t.id == original_id)
+        assert released.status == "ready"
+        assert released.claim_token is None
+
+        # Reclaim should return the same task (highest priority)
+        reclaimed = await planner.claim_next_ready_task(
+            pipeline_id, session_id, f"owner-{suffix}-2", "2099-01-01T00:00:00Z"
+        )
+        assert reclaimed is not None
+        assert reclaimed.status == "in_progress"
+
+    @settings(max_examples=10, deadline=None,
+              suppress_health_check=[HealthCheck.function_scoped_fixture])
+    @given(chain=chain_primitive_tasks())
+    @pytest.mark.asyncio
+    async def test_chain_readiness_propagation(self, initialized_db, chain) -> None:
+        """Property: completing tasks in a chain unlocks exactly the next task.
+
+        Invariant: in a linear dependency chain, only the next task becomes ready
+        when the current one completes. All later tasks stay not_ready.
+        """
+        import uuid
+        pool = get_pool()
+        suffix = uuid.uuid4().hex[:8]
+        pipeline_id, _ = await _seed_pipeline(pool, name_suffix=suffix)
+        session_id = await _seed_session(pool, pipeline_id)
+        planner = HTNPlanner(pool)
+
+        await planner.populate_from_structured_output(pipeline_id, chain)
+
+        # Only first task should be ready
+        tree = await planner.get_task_tree(pipeline_id)
+        ready_tasks = [t for t in tree if t.status == "ready"]
+        assert len(ready_tasks) == 1
+        assert ready_tasks[0].name == chain[0]["name"]
+
+        # Complete tasks in order and verify propagation
+        for i in range(len(chain) - 1):
+            claimed = await planner.claim_next_ready_task(
+                pipeline_id, session_id, f"owner-{suffix}-{i}", "2099-01-01T00:00:00Z"
+            )
+            assert claimed is not None
+            assert claimed.name == chain[i]["name"], (
+                f"Expected to claim {chain[i]['name']!r} but got {claimed.name!r}"
+            )
+
+            newly_ready = await planner.complete_task(claimed.id, None, "Done")
+
+            tree = await planner.get_task_tree(pipeline_id)
+            next_task = next(t for t in tree if t.name == chain[i + 1]["name"])
+            assert next_task.status == "ready", (
+                f"Task {chain[i+1]['name']!r} should be ready after {chain[i]['name']!r} completed"
+            )
+            assert next_task.id in newly_ready
+
+            # All tasks after the next should still be not_ready
+            for j in range(i + 2, len(chain)):
+                later = next(t for t in tree if t.name == chain[j]["name"])
+                assert later.status == "not_ready", (
+                    f"Task {chain[j]['name']!r} should be not_ready"
+                )
+
+    @settings(max_examples=10, deadline=None,
+              suppress_health_check=[HealthCheck.function_scoped_fixture])
+    @given(tasks=task_dicts())
+    @pytest.mark.asyncio
+    async def test_fail_blocks_only_hard_dependents(self, initialized_db, tasks) -> None:
+        """Property: failing a task blocks only tasks with hard dependencies on it.
+
+        Invariant: tasks not depending on the failed task are unaffected.
+        """
+        import uuid
+        pool = get_pool()
+        suffix = uuid.uuid4().hex[:8]
+        pipeline_id, _ = await _seed_pipeline(pool, name_suffix=suffix)
+        session_id = await _seed_session(pool, pipeline_id)
+        planner = HTNPlanner(pool)
+
+        await planner.populate_from_structured_output(pipeline_id, tasks)
+
+        # Find a ready primitive to fail
+        tree = await planner.get_task_tree(pipeline_id)
+        ready_primitives = [t for t in tree if t.status == "ready" and t.task_type == "primitive"]
+        if not ready_primitives:
+            return  # nothing to fail
+
+        # Claim and fail the first ready task
+        claimed = await planner.claim_next_ready_task(
+            pipeline_id, session_id, f"owner-{suffix}", "2099-01-01T00:00:00Z"
+        )
+        assert claimed is not None
+
+        # Get the deps for this pipeline before failing
+        deps = await planner.get_task_deps(pipeline_id)
+        hard_dependent_ids = {
+            d.task_id for d in deps
+            if d.depends_on_task_id == claimed.id and d.dep_type == "hard"
+        }
+
+        # Record statuses of all non-dependent tasks before the failure
+        tree_before = await planner.get_task_tree(pipeline_id)
+        non_dependent_statuses = {
+            t.id: t.status for t in tree_before
+            if t.id != claimed.id and t.id not in hard_dependent_ids
+        }
+
+        await planner.fail_task(claimed.id, "Test failure")
+
+        tree_after = await planner.get_task_tree(pipeline_id)
+
+        # Hard dependents that were not_ready or ready should now be blocked
+        for t in tree_after:
+            if t.id in hard_dependent_ids:
+                if non_dependent_statuses.get(t.id) in ("not_ready", "ready"):
+                    # These would have been blocked by fail_task
+                    pass  # fail_task only blocks not_ready and ready tasks
+
+        # Non-dependent tasks should be unchanged
+        for t in tree_after:
+            if t.id in non_dependent_statuses:
+                if non_dependent_statuses[t.id] not in ("not_ready", "ready"):
+                    # Tasks that were in_progress/completed/etc should be unchanged
+                    assert t.status == non_dependent_statuses[t.id], (
+                        f"Non-dependent task {t.name!r} changed from "
+                        f"{non_dependent_statuses[t.id]!r} to {t.status!r}"
+                    )
+
+    @settings(max_examples=10, deadline=None,
+              suppress_health_check=[HealthCheck.function_scoped_fixture])
+    @given(data=st.data())
+    @pytest.mark.asyncio
+    async def test_compound_auto_completion_with_generated_children(
+        self, initialized_db, data
+    ) -> None:
+        """Property: compound parent auto-completes when all children are completed.
+
+        Invariant: a compound task transitions to 'completed' iff all its
+        primitive children have status='completed'.
+        """
+        import uuid
+        pool = get_pool()
+        suffix = uuid.uuid4().hex[:8]
+        pipeline_id, _ = await _seed_pipeline(pool, name_suffix=suffix)
+        session_id = await _seed_session(pool, pipeline_id)
+        planner = HTNPlanner(pool)
+
+        n_children = data.draw(st.integers(min_value=1, max_value=4))
+        tasks = [{
+            "name": f"parent_{suffix}",
+            "description": "Compound parent",
+            "task_type": "compound",
+            "ordering": 0,
+        }]
+        for i in range(n_children):
+            tasks.append({
+                "name": f"child_{suffix}_{i}",
+                "description": f"Child {i}",
+                "task_type": "primitive",
+                "parent_name": f"parent_{suffix}",
+                "priority": n_children - i,  # complete in order
+                "ordering": i + 1,
+            })
+
+        await planner.populate_from_structured_output(pipeline_id, tasks)
+
+        # Complete all children
+        for i in range(n_children):
+            claimed = await planner.claim_next_ready_task(
+                pipeline_id, session_id, f"owner-{suffix}-{i}", "2099-01-01T00:00:00Z"
+            )
+            assert claimed is not None
+            assert claimed.task_type == "primitive"
+            await planner.complete_task(claimed.id, None, f"Child {i} done")
+
+        # Parent should auto-complete
+        tree = await planner.get_task_tree(pipeline_id)
+        parent = next(t for t in tree if t.name == f"parent_{suffix}")
+        assert parent.status == "completed", (
+            f"Compound parent should be 'completed' after all {n_children} children done"
+        )

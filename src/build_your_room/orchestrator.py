@@ -843,6 +843,8 @@ class PipelineOrchestrator:
             return {}
         try:
             data = json.loads(recovery)
+            if not isinstance(data, dict):
+                return {}
             return data.get("visit_counts", {})
         except (json.JSONDecodeError, TypeError):
             return {}
