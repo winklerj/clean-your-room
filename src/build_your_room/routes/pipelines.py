@@ -441,6 +441,117 @@ async def pipeline_detail(request: Request, pipeline_id: int):
     })
 
 
+@router.get("/pipelines/{pipeline_id}/tasks", response_class=HTMLResponse)
+async def pipeline_tasks_page(
+    request: Request,
+    pipeline_id: int,
+    status_filter: str | None = None,
+    type_filter: str | None = None,
+):
+    """Standalone HTN task tree view for a pipeline.
+
+    Supports optional query-param filters:
+      ?status_filter=completed  — show only tasks with this status
+      ?type_filter=primitive    — show only this task type
+    """
+    from build_your_room.main import templates
+
+    pool = get_pool()
+    async with pool.connection() as conn:
+        # Pipeline header info
+        cur = await conn.execute(
+            "SELECT p.id, p.status, p.current_stage_key, "
+            "  r.name AS repo_name, pd.name AS def_name "
+            "FROM pipelines p "
+            "JOIN repos r ON r.id = p.repo_id "
+            "JOIN pipeline_defs pd ON pd.id = p.pipeline_def_id "
+            "WHERE p.id = %s",
+            (pipeline_id,),
+        )
+        pipeline: dict[str, Any] | None = await cur.fetchone()  # type: ignore[assignment]
+        if pipeline is None:
+            return HTMLResponse("<h1>Pipeline not found</h1>", status_code=404)
+
+        # All HTN tasks for this pipeline
+        cur = await conn.execute(
+            "SELECT * FROM htn_tasks WHERE pipeline_id = %s "
+            "ORDER BY ordering ASC, id ASC",
+            (pipeline_id,),
+        )
+        tasks: list[dict[str, Any]] = await cur.fetchall()  # type: ignore[assignment]
+
+        # Task deps
+        task_ids = [t["id"] for t in tasks]
+        deps_by_task: dict[int, list[int]] = {tid: [] for tid in task_ids}
+        if task_ids:
+            placeholders = ",".join(["%s"] * len(task_ids))
+            cur = await conn.execute(
+                "SELECT * FROM htn_task_deps "
+                f"WHERE task_id IN ({placeholders})",
+                tuple(task_ids),
+            )
+            dep_rows: list[dict[str, Any]] = await cur.fetchall()  # type: ignore[assignment]
+            for d in dep_rows:
+                deps_by_task[d["task_id"]].append(d["depends_on_task_id"])
+
+    # Enrich with deps
+    for t in tasks:
+        t["deps"] = deps_by_task.get(t["id"], [])
+
+    # Progress summary (primitives only)
+    primitive_tasks = [t for t in tasks if t["task_type"] == "primitive"]
+    htn_counts: dict[str, int] = {}
+    for t in primitive_tasks:
+        htn_counts[t["status"]] = htn_counts.get(t["status"], 0) + 1
+    htn_total = len(primitive_tasks)
+    htn_completed = htn_counts.get("completed", 0)
+
+    # Count all tasks by type
+    type_counts: dict[str, int] = {}
+    for t in tasks:
+        type_counts[t["task_type"]] = type_counts.get(t["task_type"], 0) + 1
+
+    # Count all tasks by status (all types, not just primitive)
+    all_status_counts: dict[str, int] = {}
+    for t in tasks:
+        all_status_counts[t["status"]] = all_status_counts.get(t["status"], 0) + 1
+
+    # Apply filters (on the full flat list before building tree)
+    filtered_ids: set[int] | None = None
+    if status_filter or type_filter:
+        filtered_ids = set()
+        for t in tasks:
+            status_match = (not status_filter) or t["status"] == status_filter
+            type_match = (not type_filter) or t["task_type"] == type_filter
+            if status_match and type_match:
+                filtered_ids.add(t["id"])
+                # Include ancestor chain so the tree structure is preserved
+                parent = t.get("parent_task_id")
+                while parent and parent in deps_by_task:
+                    filtered_ids.add(parent)
+                    parent_task = next((x for x in tasks if x["id"] == parent), None)
+                    parent = parent_task.get("parent_task_id") if parent_task else None
+
+    if filtered_ids is not None:
+        tasks = [t for t in tasks if t["id"] in filtered_ids]
+
+    task_tree = _build_task_tree(tasks)
+
+    return templates.TemplateResponse("htn_tasks.html", {
+        "request": request,
+        "pipeline": pipeline,
+        "task_tree": task_tree,
+        "htn_total": htn_total,
+        "htn_completed": htn_completed,
+        "htn_pct": round(htn_completed / htn_total * 100) if htn_total else 0,
+        "htn_counts": htn_counts,
+        "type_counts": type_counts,
+        "all_status_counts": all_status_counts,
+        "status_filter": status_filter or "",
+        "type_filter": type_filter or "",
+    })
+
+
 @router.get("/pipelines/{pipeline_id}/logs", response_class=HTMLResponse)
 async def pipeline_logs_partial(request: Request, pipeline_id: int):
     """HTMX partial: fetch latest logs for live polling."""

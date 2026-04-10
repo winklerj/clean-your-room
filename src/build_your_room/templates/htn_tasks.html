@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% block title %}Tasks - {{ pipeline.def_name }} #{{ pipeline.id }}{% endblock %}
+{% block content %}
+<h1>
+    <a href="/pipelines/{{ pipeline.id }}">{{ pipeline.def_name }} #{{ pipeline.id }}</a>
+    &mdash; HTN Task Tree
+</h1>
+
+<div class="pipeline-detail-meta">
+    <span class="detail-repo">{{ pipeline.repo_name }}</span>
+    <span class="status-badge status-{{ pipeline.status }}">{{ pipeline.status }}</span>
+    {% if pipeline.current_stage_key %}
+    <span class="detail-stage">Stage: {{ pipeline.current_stage_key }}</span>
+    {% endif %}
+</div>
+
+{# ---- Progress summary ---- #}
+{% if htn_total > 0 %}
+<div class="htn-summary-bar">
+    <div class="progress-bar">
+        <div class="progress-fill progress-htn" style="width: {{ htn_pct }}%"></div>
+    </div>
+    <span>{{ htn_completed }}/{{ htn_total }} primitive tasks completed ({{ htn_pct }}%)</span>
+    {% if htn_counts.get('in_progress', 0) > 0 %}
+    <span class="htn-active">{{ htn_counts.in_progress }} active</span>
+    {% endif %}
+    {% if htn_counts.get('ready', 0) > 0 %}
+    <span class="htn-ready-count">{{ htn_counts.ready }} ready</span>
+    {% endif %}
+    {% if htn_counts.get('failed', 0) > 0 %}
+    <span class="htn-failed-count">{{ htn_counts.failed }} failed</span>
+    {% endif %}
+    {% if htn_counts.get('blocked', 0) > 0 %}
+    <span class="htn-blocked-count">{{ htn_counts.blocked }} blocked</span>
+    {% endif %}
+</div>
+
+{# ---- Status breakdown chips ---- #}
+<div class="htn-status-chips">
+    {% for status, count in all_status_counts.items() %}
+    <a href="?status_filter={{ status }}{% if type_filter %}&type_filter={{ type_filter }}{% endif %}"
+       class="status-chip {% if status_filter == status %}status-chip-active{% endif %}">
+        {{ status | replace('_', ' ') }}: {{ count }}
+    </a>
+    {% endfor %}
+    {% if status_filter or type_filter %}
+    <a href="/pipelines/{{ pipeline.id }}/tasks" class="status-chip status-chip-clear">Clear filters</a>
+    {% endif %}
+</div>
+
+{# ---- Type breakdown chips ---- #}
+<div class="htn-type-chips">
+    {% for ttype, count in type_counts.items() %}
+    <a href="?type_filter={{ ttype }}{% if status_filter %}&status_filter={{ status_filter }}{% endif %}"
+       class="type-chip {% if type_filter == ttype %}type-chip-active{% endif %}">
+        {{ ttype }}: {{ count }}
+    </a>
+    {% endfor %}
+</div>
+{% endif %}
+
+{# ---- Task tree ---- #}
+{% if task_tree %}
+<div class="htn-tree">
+    {% for task in task_tree %}
+    {% include "partials/htn_task_node.html" %}
+    {% endfor %}
+</div>
+{% else %}
+<p class="empty-state">
+    {% if status_filter or type_filter %}
+    No tasks match the current filters.
+    {% else %}
+    No HTN tasks for this pipeline.
+    {% endif %}
+</p>
+{% endif %}
+
+<div class="back-link">
+    <a href="/pipelines/{{ pipeline.id }}">&larr; Back to pipeline detail</a>
+</div>
+{% endblock %}

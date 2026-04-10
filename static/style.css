@@ -429,3 +429,21 @@ input[type="text"], input[type="url"], input[type="number"] { width: 100%; paddi
 .repo-detail-info a { color: #0366d6; text-decoration: none; }
 .repo-detail-info a:hover { text-decoration: underline; }
 .repo-detail-actions { display: flex; gap: 0.75rem; align-items: center; margin-bottom: 1.5rem; }
+
+/* Section link (inline header links) */
+.section-link { font-size: 0.65em; font-weight: 400; color: #3498db; text-decoration: none; margin-left: 0.5rem; }
+.section-link:hover { text-decoration: underline; }
+
+/* HTN task tree page — status filter chips */
+.htn-status-chips, .htn-type-chips { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.5rem; }
+.status-chip, .type-chip { display: inline-block; padding: 0.2rem 0.6rem; border-radius: 12px; font-size: 0.8em; text-decoration: none; color: #555; background: #f0f0f0; border: 1px solid #ddd; }
+.status-chip:hover, .type-chip:hover { background: #e0e0e0; }
+.status-chip-active, .type-chip-active { background: #3498db; color: #fff; border-color: #3498db; }
+.status-chip-clear { background: #fff; border-color: #d9534f; color: #d9534f; }
+.status-chip-clear:hover { background: #f8d7da; }
+.htn-ready-count { color: #27ae60; }
+
+/* Back link */
+.back-link { margin-top: 1.5rem; padding-top: 0.75rem; border-top: 1px solid #eee; }
+.back-link a { color: #3498db; text-decoration: none; font-weight: 600; }
+.back-link a:hover { text-decoration: underline; }
