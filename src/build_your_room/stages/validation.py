@@ -330,8 +330,26 @@ async def run_validation_stage(
         _log(log_buffer, pipeline_id, "No browser validation required — validated")
         return STAGE_RESULT_VALIDATED
 
-    _log(log_buffer, pipeline_id, "Starting browser validation")
     assert runner is not None  # ensured by use_devbrowser guard above
+
+    # Check dev-browser availability and launch bridge
+    devbrowser_available = BrowserRunner.is_available(runner.devbrowser_skill_path)
+    if devbrowser_available:
+        bridge_started = await runner.launch_bridge()
+        if bridge_started:
+            _log(log_buffer, pipeline_id, "Dev-browser bridge started for browser validation")
+        else:
+            _log(
+                log_buffer, pipeline_id,
+                "Dev-browser bridge failed to start — browser validation will use fallback mode",
+            )
+    else:
+        _log(
+            log_buffer, pipeline_id,
+            "Dev-browser skill not installed — browser validation will use fallback mode",
+        )
+
+    _log(log_buffer, pipeline_id, "Starting browser validation")
 
     browser_passed = await _run_browser_validation(
         runner=runner,
@@ -363,7 +381,11 @@ async def run_validation_stage(
             artifact_path = artifact.get("path", "")
             if artifact_path:
                 await _set_stage_artifact(pool, stage_id, artifact_path)
-                _log(log_buffer, pipeline_id, f"Validation recording saved: {artifact_path}")
+                mode = "via bridge" if runner.has_bridge else "placeholder"
+                _log(
+                    log_buffer, pipeline_id,
+                    f"Validation recording saved ({mode}): {artifact_path}",
+                )
         except Exception:
             logger.warning(
                 "Failed to record browser artifact for pipeline %d",

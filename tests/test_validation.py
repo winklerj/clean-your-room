@@ -5,7 +5,8 @@ enabled/disabled, recording on success, cancellation at multiple gates, missing
 adapter, browser validation pass/fail, DB session rows, artifact persistence,
 unparseable browser output, property-based tests for validation decisions,
 browser runner lifecycle, verification command registry integration,
-prompt resolution, and report generation.
+prompt resolution, report generation, dev-browser bridge launch integration,
+graceful degradation when dev-browser unavailable, and recording mode logging.
 
 All agent interactions are mocked — no live API calls.
 Verification commands use a mock CommandRegistry — no real subprocesses.
@@ -1149,9 +1150,256 @@ class TestBrowserRunner:
 
     @pytest.mark.asyncio
     async def test_cleanup_stops_server(self) -> None:
-        """cleanup() delegates to stop_dev_server."""
+        """cleanup() delegates to stop_dev_server and close_bridge."""
         runner = BrowserRunner(
             clone_path=Path("/tmp"), logs_dir=Path("/tmp"),
             artifacts_dir=Path("/tmp"), state_dir=Path("/tmp"),
         )
         await runner.cleanup()
+
+
+# ---------------------------------------------------------------------------
+# Integration tests — dev-browser bridge in validation stage
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_devbrowser_bridge_launched_when_available(
+    pool_with_stage, log_buffer, cancel_event, tmp_pipelines_dir
+):
+    """When dev-browser is available, bridge is launched before browser validation.
+
+    Invariant: BrowserRunner.launch_bridge() is called when
+    is_available() returns True.
+    """
+    pool, pipeline_id, stage_id = pool_with_stage
+    session = _make_mock_session(structured_output=_passed_browser_output())
+    adapter = _make_mock_adapter(session)
+
+    mock_runner = AsyncMock(spec=BrowserRunner)
+    mock_runner.start_dev_server.return_value = {"url": "http://localhost:3000", "pid": 1234}
+    mock_runner.devbrowser_skill_path = Path("/fake/skill")
+    mock_runner.has_bridge = True
+    mock_runner.launch_bridge.return_value = True
+
+    async with pool.connection() as conn:
+        await conn.execute(
+            "UPDATE pipelines SET config_json = %s WHERE id = %s",
+            (json.dumps({"devbrowser_enabled": True}), pipeline_id),
+        )
+        await conn.commit()
+
+    with (
+        patch(_PATCH_VERIFY, return_value=_all_pass_results()),
+        patch.object(BrowserRunner, "is_available", return_value=True),
+    ):
+        result = await run_validation_stage(
+            pool=pool,
+            pipeline_id=pipeline_id,
+            stage_id=stage_id,
+            node=_make_node(uses_devbrowser=True),
+            adapters={"claude": adapter},
+            log_buffer=log_buffer,
+            cancel_event=cancel_event,
+            pipelines_dir=tmp_pipelines_dir,
+            browser_runner=mock_runner,
+        )
+
+    assert result == STAGE_RESULT_VALIDATED
+    mock_runner.launch_bridge.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_devbrowser_unavailable_still_validates(
+    pool_with_stage, log_buffer, cancel_event, tmp_pipelines_dir
+):
+    """When dev-browser is unavailable, browser validation proceeds in fallback mode.
+
+    Invariant: validation still runs with mock runner even without dev-browser
+    skill installed. The runner's bridge methods return fallback values.
+    """
+    pool, pipeline_id, stage_id = pool_with_stage
+    session = _make_mock_session(structured_output=_passed_browser_output())
+    adapter = _make_mock_adapter(session)
+
+    mock_runner = AsyncMock(spec=BrowserRunner)
+    mock_runner.start_dev_server.return_value = {"url": "http://localhost:3000", "pid": 1234}
+    mock_runner.devbrowser_skill_path = None
+    mock_runner.has_bridge = False
+
+    async with pool.connection() as conn:
+        await conn.execute(
+            "UPDATE pipelines SET config_json = %s WHERE id = %s",
+            (json.dumps({"devbrowser_enabled": True}), pipeline_id),
+        )
+        await conn.commit()
+
+    with (
+        patch(_PATCH_VERIFY, return_value=_all_pass_results()),
+        patch.object(BrowserRunner, "is_available", return_value=False),
+    ):
+        result = await run_validation_stage(
+            pool=pool,
+            pipeline_id=pipeline_id,
+            stage_id=stage_id,
+            node=_make_node(uses_devbrowser=True),
+            adapters={"claude": adapter},
+            log_buffer=log_buffer,
+            cancel_event=cancel_event,
+            pipelines_dir=tmp_pipelines_dir,
+            browser_runner=mock_runner,
+        )
+
+    assert result == STAGE_RESULT_VALIDATED
+    mock_runner.launch_bridge.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_recording_mode_logged_with_bridge(
+    pool_with_stage, log_buffer, cancel_event, tmp_pipelines_dir
+):
+    """Recording log message indicates bridge vs placeholder mode.
+
+    Invariant: log contains "via bridge" when has_bridge is True.
+    """
+    pool, pipeline_id, stage_id = pool_with_stage
+    session = _make_mock_session(structured_output=_passed_browser_output())
+    adapter = _make_mock_adapter(session)
+
+    mock_runner = AsyncMock(spec=BrowserRunner)
+    mock_runner.start_dev_server.return_value = {"url": "http://localhost:3000", "pid": 1234}
+    mock_runner.devbrowser_skill_path = Path("/fake/skill")
+    mock_runner.has_bridge = True
+    mock_runner.launch_bridge.return_value = True
+    mock_runner.browser_record_artifact.return_value = {
+        "path": "/tmp/recording.gif", "format": "gif", "name": "validation_success",
+    }
+
+    async with pool.connection() as conn:
+        await conn.execute(
+            "UPDATE pipelines SET config_json = %s WHERE id = %s",
+            (json.dumps({"devbrowser_enabled": True}), pipeline_id),
+        )
+        await conn.commit()
+
+    with (
+        patch(_PATCH_VERIFY, return_value=_all_pass_results()),
+        patch.object(BrowserRunner, "is_available", return_value=True),
+    ):
+        result = await run_validation_stage(
+            pool=pool,
+            pipeline_id=pipeline_id,
+            stage_id=stage_id,
+            node=_make_node(uses_devbrowser=True, record_on_success=True),
+            adapters={"claude": adapter},
+            log_buffer=log_buffer,
+            cancel_event=cancel_event,
+            pipelines_dir=tmp_pipelines_dir,
+            browser_runner=mock_runner,
+        )
+
+    assert result == STAGE_RESULT_VALIDATED
+    # Check that the log contains the bridge mode indicator
+    logs = log_buffer.get_history(pipeline_id)
+    recording_logs = [msg for msg in logs if "recording saved" in msg.lower()]
+    assert len(recording_logs) >= 1
+    assert "via bridge" in recording_logs[0].lower()
+
+
+@pytest.mark.asyncio
+async def test_recording_mode_logged_placeholder(
+    pool_with_stage, log_buffer, cancel_event, tmp_pipelines_dir
+):
+    """Recording log message indicates placeholder mode when no bridge.
+
+    Invariant: log contains "placeholder" when has_bridge is False.
+    """
+    pool, pipeline_id, stage_id = pool_with_stage
+    session = _make_mock_session(structured_output=_passed_browser_output())
+    adapter = _make_mock_adapter(session)
+
+    mock_runner = AsyncMock(spec=BrowserRunner)
+    mock_runner.start_dev_server.return_value = {"url": "http://localhost:3000", "pid": 1234}
+    mock_runner.devbrowser_skill_path = None
+    mock_runner.has_bridge = False
+    mock_runner.browser_record_artifact.return_value = {
+        "path": "/tmp/placeholder.gif", "format": "gif", "name": "validation_success",
+    }
+
+    async with pool.connection() as conn:
+        await conn.execute(
+            "UPDATE pipelines SET config_json = %s WHERE id = %s",
+            (json.dumps({"devbrowser_enabled": True}), pipeline_id),
+        )
+        await conn.commit()
+
+    with (
+        patch(_PATCH_VERIFY, return_value=_all_pass_results()),
+        patch.object(BrowserRunner, "is_available", return_value=False),
+    ):
+        result = await run_validation_stage(
+            pool=pool,
+            pipeline_id=pipeline_id,
+            stage_id=stage_id,
+            node=_make_node(uses_devbrowser=True, record_on_success=True),
+            adapters={"claude": adapter},
+            log_buffer=log_buffer,
+            cancel_event=cancel_event,
+            pipelines_dir=tmp_pipelines_dir,
+            browser_runner=mock_runner,
+        )
+
+    assert result == STAGE_RESULT_VALIDATED
+    logs = log_buffer.get_history(pipeline_id)
+    recording_logs = [msg for msg in logs if "recording saved" in msg.lower()]
+    assert len(recording_logs) >= 1
+    assert "placeholder" in recording_logs[0].lower()
+
+
+@pytest.mark.asyncio
+async def test_bridge_launch_failure_continues(
+    pool_with_stage, log_buffer, cancel_event, tmp_pipelines_dir
+):
+    """Bridge launch failure doesn't block validation.
+
+    Invariant: if launch_bridge returns False, validation still proceeds
+    with fallback behavior.
+    """
+    pool, pipeline_id, stage_id = pool_with_stage
+    session = _make_mock_session(structured_output=_passed_browser_output())
+    adapter = _make_mock_adapter(session)
+
+    mock_runner = AsyncMock(spec=BrowserRunner)
+    mock_runner.start_dev_server.return_value = {"url": "http://localhost:3000", "pid": 1234}
+    mock_runner.devbrowser_skill_path = Path("/fake/skill")
+    mock_runner.has_bridge = False
+    mock_runner.launch_bridge.return_value = False  # launch fails
+
+    async with pool.connection() as conn:
+        await conn.execute(
+            "UPDATE pipelines SET config_json = %s WHERE id = %s",
+            (json.dumps({"devbrowser_enabled": True}), pipeline_id),
+        )
+        await conn.commit()
+
+    with (
+        patch(_PATCH_VERIFY, return_value=_all_pass_results()),
+        patch.object(BrowserRunner, "is_available", return_value=True),
+    ):
+        result = await run_validation_stage(
+            pool=pool,
+            pipeline_id=pipeline_id,
+            stage_id=stage_id,
+            node=_make_node(uses_devbrowser=True),
+            adapters={"claude": adapter},
+            log_buffer=log_buffer,
+            cancel_event=cancel_event,
+            pipelines_dir=tmp_pipelines_dir,
+            browser_runner=mock_runner,
+        )
+
+    assert result == STAGE_RESULT_VALIDATED
+    mock_runner.launch_bridge.assert_called_once()
+    logs = log_buffer.get_history(pipeline_id)
+    fallback_logs = [msg for msg in logs if "fallback" in msg.lower()]
+    assert len(fallback_logs) >= 1
