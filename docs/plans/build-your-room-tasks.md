@@ -10,7 +10,7 @@ Tracking progress on the build-your-room spec implementation plan.
 - [x] 4. CloneManager for repo cloning, workspace refs, cleanup, and reset-to-head behavior
 - [x] 5. Sandbox/path guard abstraction + per-stage tool profiles reused by adapters and verifiers
 - [x] 6. Command-template registry for repo-standard `uv run` verification commands
-- [ ] 7. ContextMonitor as a reusable hook
+- [x] 7. ContextMonitor as a reusable hook
 - [ ] 8. Config module with all env vars
 - [ ] 9. HTNPlanner: task graph CRUD, atomic claims, readiness propagation, postcondition verification
 
