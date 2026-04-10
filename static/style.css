@@ -244,6 +244,17 @@ input[type="text"], input[type="url"], input[type="number"] { width: 100%; paddi
 .artifact-unavailable { font-size: 0.85em; color: #999; font-style: italic; margin-left: 0.5rem; }
 .artifact-content { background: #f6f8fa; border: 1px solid #e1e4e8; border-radius: 4px; padding: 0.75rem; font-size: 0.85em; white-space: pre-wrap; word-wrap: break-word; max-height: 400px; overflow-y: auto; font-family: monospace; }
 
+/* Context usage chart */
+.context-chart { overflow-x: auto; margin: 0.5rem 0; }
+.context-chart-svg { max-height: 160px; width: 100%; }
+.chart-axis-label { font-size: 9px; fill: #888; font-family: monospace; }
+.chart-threshold-label { font-size: 8px; fill: #d9534f; font-family: monospace; }
+.chart-bar { opacity: 0.85; transition: opacity 0.15s; }
+.chart-bar:hover { opacity: 1; }
+.chart-bar-ok { fill: #27ae60; }
+.chart-bar-warn { fill: #f0ad4e; }
+.chart-bar-high { fill: #d9534f; }
+
 /* Review feedback */
 .review-feedback-list { display: flex; flex-direction: column; gap: 0.5rem; }
 .review-feedback-entry { border-left: 3px solid #8e44ad; padding: 0.5rem 0.75rem; background: #faf5ff; border-radius: 0 4px 4px 0; }

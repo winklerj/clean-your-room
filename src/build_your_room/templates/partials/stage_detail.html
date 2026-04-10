@@ -54,6 +54,45 @@
     </div>
     {% endif %}
 
+    {# ---- Context usage chart over time ---- #}
+    {% if context_chart %}
+    <div class="stage-detail-section">
+        <h4>Context Usage Over Time</h4>
+        <div class="context-chart">
+            <svg viewBox="0 0 {{ context_chart.total_w }} {{ context_chart.total_h }}"
+                 class="context-chart-svg" preserveAspectRatio="xMinYMid meet">
+                {# Y-axis grid lines #}
+                {% for gl in context_chart.grid_lines %}
+                <line x1="{{ context_chart.left_pad }}" y1="{{ gl.y }}"
+                      x2="{{ context_chart.total_w - context_chart.right_pad }}" y2="{{ gl.y }}"
+                      stroke="#e0e0e0" stroke-width="0.5"/>
+                <text x="{{ context_chart.left_pad - 4 }}" y="{{ gl.y + 3 }}"
+                      text-anchor="end" class="chart-axis-label">{{ gl.pct }}%</text>
+                {% endfor %}
+
+                {# Threshold line #}
+                <line x1="{{ context_chart.left_pad }}" y1="{{ context_chart.thresh_y }}"
+                      x2="{{ context_chart.total_w - context_chart.right_pad }}" y2="{{ context_chart.thresh_y }}"
+                      stroke="#d9534f" stroke-width="1" stroke-dasharray="4,3"/>
+                <text x="{{ context_chart.total_w - context_chart.right_pad + 2 }}"
+                      y="{{ context_chart.thresh_y + 3 }}"
+                      class="chart-threshold-label">{{ context_chart.threshold }}%</text>
+
+                {# Bars #}
+                {% for bar in context_chart.bars %}
+                <rect x="{{ bar.x }}" y="{{ bar.y }}"
+                      width="{{ bar.width }}" height="{{ bar.height }}"
+                      class="chart-bar {{ bar.css_class }}" rx="2">
+                    <title>{{ bar.label }}: {{ "%.0f"|format(bar.pct) }}%</title>
+                </rect>
+                <text x="{{ bar.label_x }}" y="{{ bar.label_y }}"
+                      text-anchor="middle" class="chart-axis-label">{{ bar.label }}</text>
+                {% endfor %}
+            </svg>
+        </div>
+    </div>
+    {% endif %}
+
     {# ---- Sessions with logs ---- #}
     {% if sessions %}
     <div class="stage-detail-section">

@@ -601,3 +601,308 @@ async def test_stage_detail_context_css_class_correct(client, ctx_pct: float | N
         assert "progress-ctx-warn" in resp.text
     else:
         assert "progress-ctx-ok" in resp.text
+
+
+# ---------------------------------------------------------------------------
+# Tests — context usage chart over time
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_stage_detail_context_chart_shown(client):
+    """Context usage chart appears when sessions have context_usage_pct.
+
+    Invariant: sessions with non-null context_usage_pct produce an SVG chart
+    section with the "Context Usage Over Time" header.
+    """
+    repo_id = await _seed_repo()
+    def_id = await _seed_pipeline_def()
+    pid = await _seed_pipeline(repo_id, def_id)
+    sid = await _seed_stage(pid)
+    await _seed_session(sid, context_usage_pct=30.0, status="completed")
+    await _seed_session(sid, context_usage_pct=65.0, status="completed")
+    await _seed_session(sid, context_usage_pct=85.0, status="running")
+
+    resp = await client.get(f"/pipelines/{pid}/stages/{sid}")
+    assert resp.status_code == 200
+    assert "Context Usage Over Time" in resp.text
+    assert "context-chart-svg" in resp.text
+    assert "chart-bar" in resp.text
+    # Three sessions = three bars with labels S1, S2, S3
+    assert "S1" in resp.text
+    assert "S2" in resp.text
+    assert "S3" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_stage_detail_context_chart_hidden_no_data(client):
+    """Context usage chart is not rendered when no sessions have context data.
+
+    Invariant: chart section only appears when at least one session has
+    a non-null context_usage_pct.
+    """
+    repo_id = await _seed_repo()
+    def_id = await _seed_pipeline_def()
+    pid = await _seed_pipeline(repo_id, def_id)
+    sid = await _seed_stage(pid)
+    await _seed_session(sid, context_usage_pct=None)
+
+    resp = await client.get(f"/pipelines/{pid}/stages/{sid}")
+    assert resp.status_code == 200
+    assert "Context Usage Over Time" not in resp.text
+    assert "context-chart-svg" not in resp.text
+
+
+@pytest.mark.asyncio
+async def test_stage_detail_context_chart_threshold_line(client):
+    """Context usage chart includes the threshold dashed line.
+
+    Invariant: the SVG contains a dashed line at the configured threshold.
+    """
+    repo_id = await _seed_repo()
+    def_id = await _seed_pipeline_def()
+    pid = await _seed_pipeline(repo_id, def_id)
+    sid = await _seed_stage(pid)
+    await _seed_session(sid, context_usage_pct=50.0)
+
+    resp = await client.get(f"/pipelines/{pid}/stages/{sid}")
+    assert resp.status_code == 200
+    assert "stroke-dasharray" in resp.text
+    # Default threshold is 60%
+    assert ">60%<" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_stage_detail_context_chart_bar_colors(client):
+    """Chart bars have correct color classes based on usage percentage.
+
+    Invariant: >80% => chart-bar-high, >50% => chart-bar-warn, else chart-bar-ok.
+    """
+    repo_id = await _seed_repo()
+    def_id = await _seed_pipeline_def()
+    pid = await _seed_pipeline(repo_id, def_id)
+    sid = await _seed_stage(pid)
+    await _seed_session(sid, context_usage_pct=30.0, status="completed")
+    await _seed_session(sid, context_usage_pct=65.0, status="completed")
+    await _seed_session(sid, context_usage_pct=90.0, status="running")
+
+    resp = await client.get(f"/pipelines/{pid}/stages/{sid}")
+    assert resp.status_code == 200
+    assert "chart-bar-ok" in resp.text
+    assert "chart-bar-warn" in resp.text
+    assert "chart-bar-high" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_stage_detail_context_chart_custom_threshold(client):
+    """Chart uses context threshold from pipeline config_json.
+
+    Invariant: the threshold displayed on the chart matches the pipeline's
+    configured context_threshold_pct value.
+    """
+    repo_id = await _seed_repo()
+    def_id = await _seed_pipeline_def()
+    pool = get_pool()
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            "INSERT INTO pipelines "
+            "(pipeline_def_id, repo_id, clone_path, review_base_rev, status, config_json) "
+            "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+            (def_id, repo_id, "/tmp/clone", "abc123", "running",
+             json.dumps({"context_threshold_pct": 75})),
+        )
+        row = await cur.fetchone()
+        assert row is not None
+        pid = row["id"]
+        await conn.commit()
+
+    sid = await _seed_stage(pid)
+    await _seed_session(sid, context_usage_pct=40.0)
+
+    resp = await client.get(f"/pipelines/{pid}/stages/{sid}")
+    assert resp.status_code == 200
+    # Should show 75% threshold, not default 60%
+    assert ">75%<" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_stage_detail_context_chart_skips_null_sessions(client):
+    """Chart only includes sessions with non-null context usage.
+
+    Invariant: sessions with NULL context_usage_pct are excluded from the
+    chart bars, but sessions with data still render.
+    """
+    repo_id = await _seed_repo()
+    def_id = await _seed_pipeline_def()
+    pid = await _seed_pipeline(repo_id, def_id)
+    sid = await _seed_stage(pid)
+    await _seed_session(sid, context_usage_pct=None, status="completed")
+    await _seed_session(sid, context_usage_pct=50.0, status="completed")
+    await _seed_session(sid, context_usage_pct=None, status="running")
+
+    resp = await client.get(f"/pipelines/{pid}/stages/{sid}")
+    assert resp.status_code == 200
+    assert "Context Usage Over Time" in resp.text
+    # Only session 2 (index 2) has data, so label is S2
+    assert "S2" in resp.text
+    # S1 and S3 should not appear as chart bars (they have null context)
+    text = resp.text
+    # Count chart-bar occurrences to verify only 1 bar
+    assert text.count("class=\"chart-bar") == 1
+
+
+@pytest.mark.asyncio
+async def test_stage_detail_context_chart_bar_tooltips(client):
+    """Chart bars have tooltip titles showing the percentage.
+
+    Invariant: each bar's <title> element shows the session label and percentage.
+    """
+    repo_id = await _seed_repo()
+    def_id = await _seed_pipeline_def()
+    pid = await _seed_pipeline(repo_id, def_id)
+    sid = await _seed_stage(pid)
+    await _seed_session(sid, context_usage_pct=42.0)
+
+    resp = await client.get(f"/pipelines/{pid}/stages/{sid}")
+    assert resp.status_code == 200
+    assert "<title>S1: 42%</title>" in resp.text
+
+
+# ---------------------------------------------------------------------------
+# Unit tests — _build_context_chart helper
+# ---------------------------------------------------------------------------
+
+
+def test_build_context_chart_returns_none_for_no_data():
+    """_build_context_chart returns None when no sessions have context data.
+
+    Invariant: empty or all-null sessions produce no chart.
+    """
+    from build_your_room.routes.pipelines import _build_context_chart
+
+    assert _build_context_chart([]) is None
+    assert _build_context_chart([{"context_usage_pct": None}]) is None
+
+
+def test_build_context_chart_bar_count():
+    """_build_context_chart produces one bar per session with data.
+
+    Invariant: bar count equals sessions with non-null context_usage_pct.
+    """
+    from build_your_room.routes.pipelines import _build_context_chart
+
+    sessions = [
+        {"context_usage_pct": 20.0},
+        {"context_usage_pct": None},
+        {"context_usage_pct": 60.0},
+    ]
+    result = _build_context_chart(sessions)
+    assert result is not None
+    assert len(result["bars"]) == 2
+    assert result["bars"][0]["label"] == "S1"
+    assert result["bars"][1]["label"] == "S3"
+
+
+def test_build_context_chart_threshold_default():
+    """_build_context_chart uses 60% threshold by default.
+
+    Invariant: threshold defaults to 60 when not specified.
+    """
+    from build_your_room.routes.pipelines import _build_context_chart
+
+    result = _build_context_chart([{"context_usage_pct": 50.0}])
+    assert result is not None
+    assert result["threshold"] == 60
+
+
+def test_build_context_chart_custom_threshold():
+    """_build_context_chart respects custom threshold value.
+
+    Invariant: threshold in output matches the provided threshold argument.
+    """
+    from build_your_room.routes.pipelines import _build_context_chart
+
+    result = _build_context_chart([{"context_usage_pct": 50.0}], threshold=80)
+    assert result is not None
+    assert result["threshold"] == 80
+
+
+def test_build_context_chart_color_classes():
+    """_build_context_chart assigns correct CSS classes by percentage.
+
+    Invariant: >80% => chart-bar-high, >50% => chart-bar-warn, else chart-bar-ok.
+    """
+    from build_your_room.routes.pipelines import _build_context_chart
+
+    sessions = [
+        {"context_usage_pct": 30.0},
+        {"context_usage_pct": 65.0},
+        {"context_usage_pct": 90.0},
+    ]
+    result = _build_context_chart(sessions)
+    assert result is not None
+    assert result["bars"][0]["css_class"] == "chart-bar-ok"
+    assert result["bars"][1]["css_class"] == "chart-bar-warn"
+    assert result["bars"][2]["css_class"] == "chart-bar-high"
+
+
+def test_build_context_chart_grid_lines():
+    """_build_context_chart produces 5 grid lines at 0/25/50/75/100.
+
+    Invariant: grid lines are at fixed percentage intervals.
+    """
+    from build_your_room.routes.pipelines import _build_context_chart
+
+    result = _build_context_chart([{"context_usage_pct": 50.0}])
+    assert result is not None
+    assert len(result["grid_lines"]) == 5
+    pcts = [gl["pct"] for gl in result["grid_lines"]]
+    assert pcts == [0, 25, 50, 75, 100]
+
+
+# ---------------------------------------------------------------------------
+# Property-based tests — context chart
+# ---------------------------------------------------------------------------
+
+
+@hyp_settings(
+    max_examples=15,
+    suppress_health_check=[HealthCheck.function_scoped_fixture, HealthCheck.too_slow],
+)
+@given(
+    ctx_values=st.lists(
+        st.one_of(
+            st.none(),
+            st.integers(min_value=0, max_value=100).map(float),
+        ),
+        min_size=0,
+        max_size=6,
+    ),
+)
+@pytest.mark.asyncio
+async def test_stage_detail_context_chart_bar_count_matches_data(
+    client, ctx_values: list[float | None],
+):
+    """Chart bar count equals number of sessions with non-null context usage.
+
+    Invariant: for any combination of sessions with/without context data,
+    the chart shows exactly one bar per session that has data.
+    """
+    uid = uuid.uuid4().hex[:8]
+    repo_id = await _seed_repo(name=f"proj-{uid}", local_path=f"/tmp/{uid}")
+    def_id = await _seed_pipeline_def(name=f"def-{uid}")
+    pid = await _seed_pipeline(repo_id, def_id)
+    sid = await _seed_stage(pid)
+
+    for cv in ctx_values:
+        await _seed_session(sid, context_usage_pct=cv)
+
+    resp = await client.get(f"/pipelines/{pid}/stages/{sid}")
+    assert resp.status_code == 200
+
+    non_null_count = sum(1 for v in ctx_values if v is not None)
+    if non_null_count == 0:
+        assert "Context Usage Over Time" not in resp.text
+    else:
+        assert "Context Usage Over Time" in resp.text
+        assert resp.text.count("class=\"chart-bar ") == non_null_count

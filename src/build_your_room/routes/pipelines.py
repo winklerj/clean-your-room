@@ -598,6 +598,72 @@ async def pipeline_logs_partial(request: Request, pipeline_id: int):
     })
 
 
+def _build_context_chart(
+    sessions: list[dict[str, Any]],
+    threshold: int = 60,
+) -> dict[str, Any] | None:
+    """Build pre-computed SVG chart data for context usage over time.
+
+    Returns None when no sessions have context usage data.
+    """
+    points: list[dict[str, Any]] = []
+    for i, s in enumerate(sessions):
+        pct = s.get("context_usage_pct")
+        if pct is not None:
+            points.append({"label": f"S{i + 1}", "pct": float(pct)})
+
+    if not points:
+        return None
+
+    bar_w = 32
+    gap = 8
+    left_pad = 40
+    right_pad = 24
+    top_pad = 15
+    bottom_pad = 25
+    chart_h = 120
+    total_w = left_pad + len(points) * (bar_w + gap) + right_pad
+    total_h = top_pad + chart_h + bottom_pad
+
+    grid_lines = []
+    for pct_val in (0, 25, 50, 75, 100):
+        y = round(top_pad + chart_h - (pct_val / 100 * chart_h), 1)
+        grid_lines.append({"pct": pct_val, "y": y})
+
+    thresh_y = round(top_pad + chart_h - (threshold / 100 * chart_h), 1)
+
+    bars = []
+    for idx, pt in enumerate(points):
+        bar_x = round(left_pad + idx * (bar_w + gap) + gap / 2, 1)
+        bar_h = max(round(pt["pct"] / 100 * chart_h, 1), 0)
+        bar_y = round(top_pad + chart_h - bar_h, 1)
+        css_class = (
+            "chart-bar-high" if pt["pct"] > 80
+            else "chart-bar-warn" if pt["pct"] > 50
+            else "chart-bar-ok"
+        )
+        bars.append({
+            "x": bar_x, "y": bar_y,
+            "width": bar_w, "height": bar_h,
+            "css_class": css_class,
+            "label": pt["label"],
+            "label_x": round(bar_x + bar_w / 2, 1),
+            "label_y": round(top_pad + chart_h + 14, 1),
+            "pct": pt["pct"],
+        })
+
+    return {
+        "total_w": total_w,
+        "total_h": total_h,
+        "left_pad": left_pad,
+        "right_pad": right_pad,
+        "grid_lines": grid_lines,
+        "threshold": threshold,
+        "thresh_y": thresh_y,
+        "bars": bars,
+    }
+
+
 async def _fetch_stage_detail(
     pipeline_id: int, stage_id: int,
 ) -> dict[str, Any] | None:
@@ -605,7 +671,7 @@ async def _fetch_stage_detail(
 
     Returns the stage row, its sessions with per-session logs,
     review feedback entries, output artifact content, and
-    per-session context usage information.
+    context usage chart data for the stage.
     """
     pool = get_pool()
     async with pool.connection() as conn:
@@ -617,6 +683,13 @@ async def _fetch_stage_detail(
         stage: dict[str, Any] | None = await cur.fetchone()  # type: ignore[assignment]
         if stage is None:
             return None
+
+        # Pipeline config for context threshold
+        cur = await conn.execute(
+            "SELECT config_json FROM pipelines WHERE id = %s",
+            (pipeline_id,),
+        )
+        pipeline_cfg_row: dict[str, Any] | None = await cur.fetchone()  # type: ignore[assignment]
 
         # Sessions for this stage
         cur = await conn.execute(
@@ -663,11 +736,23 @@ async def _fetch_stage_detail(
         except (OSError, ValueError):
             artifact_content = None
 
+    # Context usage chart data
+    context_threshold = 60
+    if pipeline_cfg_row:
+        try:
+            cfg = json.loads(pipeline_cfg_row["config_json"] or "{}")
+            context_threshold = int(cfg.get("context_threshold_pct", 60))
+        except (json.JSONDecodeError, TypeError, ValueError):
+            pass
+
+    context_chart = _build_context_chart(sessions, context_threshold)
+
     return {
         "stage": stage,
         "sessions": enriched_sessions,
         "review_feedback": review_feedback,
         "artifact_content": artifact_content,
+        "context_chart": context_chart,
     }
 
 
