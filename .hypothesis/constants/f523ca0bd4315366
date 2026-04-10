@@ -1,4 +1,0 @@
-# file: /Users/robbwinkle/jj/robb/clean-your-room/.venv/bin/pytest
-# hypothesis_version: 6.151.9
-
-['-script.pyw', '.exe', '__main__']

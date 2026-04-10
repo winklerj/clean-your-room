@@ -12,10 +12,11 @@ import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
 from psycopg_pool import AsyncConnectionPool
 
+from build_your_room.adapters.base import AgentAdapter
 from build_your_room.config import (
     PIPELINE_HEARTBEAT_INTERVAL_SEC,
     PIPELINE_LEASE_TTL_SEC,
@@ -25,40 +26,6 @@ from build_your_room.stage_graph import StageGraph
 from build_your_room.streaming import LogBuffer
 
 logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Protocols for components wired in later tasks
-# ---------------------------------------------------------------------------
-
-
-class SessionResult(Protocol):
-    """Result from an agent session turn."""
-
-    output: str
-    structured_output: dict | None
-
-
-class LiveSession(Protocol):
-    """A live agent session handle."""
-
-    session_id: str | None
-
-    async def send_turn(
-        self, prompt: str, output_schema: dict | None = None
-    ) -> SessionResult: ...
-
-    async def get_context_usage(self) -> dict | None: ...
-
-    async def snapshot(self) -> dict: ...
-
-    async def close(self) -> None: ...
-
-
-class AgentAdapter(Protocol):
-    """Opens live sessions in a pipeline sandbox."""
-
-    async def start_session(self, config: dict) -> LiveSession: ...
 
 
 # ---------------------------------------------------------------------------
