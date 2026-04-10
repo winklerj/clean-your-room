@@ -24,3 +24,4 @@ Full pipeline detail page at `GET /pipelines/{id}` with:
 - The `IN (...)` pattern with dynamic placeholders continues to work well for batched session/dep queries — just need to guard against empty lists.
 - Total cost: summed from enriched stages' sessions rather than a separate DB query, avoiding an extra round trip.
 - Test count: 45 new tests covering all spec requirements. 691 total (640 + 45 new + 6 from modified escalation tests).
+- CSS: 104 lines of pipeline detail styles were missing from the initial commit — stage graph nodes/edges, stage tabs, session rows, HTN task tree with status-colored borders, lease/workspace indicators, log entries, and clone management. Without these, the page rendered but was unstyled.
