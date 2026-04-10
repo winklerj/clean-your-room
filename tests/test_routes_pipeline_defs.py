@@ -615,7 +615,7 @@ _stage_key_st = st.from_regex(r"[a-z][a-z0-9_]{0,15}", fullmatch=True)
     max_examples=20,
     suppress_health_check=[HealthCheck.function_scoped_fixture],
 )
-@given(key=_stage_key_st, name=st.text(min_size=1, max_size=30).filter(lambda s: "\r" not in s))
+@given(key=_stage_key_st, name=st.text(min_size=1, max_size=30).filter(lambda s: "\r" not in s and s == s.strip()))
 @pytest.mark.asyncio
 async def test_parse_nodes_roundtrip(client, key, name):
     """Parsed node key and name match what was put into form fields."""

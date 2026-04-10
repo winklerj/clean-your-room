@@ -8,6 +8,16 @@
 
     <div class="pipeline-card-repo">{{ pipeline.repo_name }}</div>
 
+    {% if pipeline.mini_graph %}
+    <div class="stage-graph-mini">
+        {% for node in pipeline.mini_graph %}
+        {% if not loop.first %}<span class="mini-arrow">&rarr;</span>{% endif %}
+        <span class="mini-node {% if node.is_active %}mini-node-active{% endif %}"
+              title="{{ node.name }}">{{ node.name }}</span>
+        {% endfor %}
+    </div>
+    {% endif %}
+
     {% if pipeline.stage %}
     <div class="pipeline-card-stage">
         <span class="stage-type">{{ pipeline.stage.stage_type }}</span>

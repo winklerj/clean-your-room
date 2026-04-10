@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from fastapi import APIRouter, Request
@@ -13,6 +14,24 @@ router = APIRouter()
 
 # Status values that allow clone cleanup
 _TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled", "killed"})
+
+
+def _parse_mini_graph_nodes(stage_graph_json: str | None) -> list[dict[str, str]]:
+    """Extract ordered node list from stage_graph_json for mini-visualization.
+
+    Returns a list of dicts with 'key' and 'name' for each stage node,
+    ordered as they appear in the definition (which follows the pipeline flow).
+    """
+    if not stage_graph_json:
+        return []
+    try:
+        graph = json.loads(stage_graph_json)
+    except (json.JSONDecodeError, TypeError):
+        return []
+    raw_nodes = graph.get("nodes")
+    if not raw_nodes or not isinstance(raw_nodes, list):
+        return []
+    return [{"key": n.get("key", ""), "name": n.get("name", "")} for n in raw_nodes]
 
 
 async def _fetch_dashboard_data() -> dict[str, Any]:
@@ -93,10 +112,13 @@ async def _fetch_dashboard_data() -> dict[str, Any]:
         )
         repos: list[dict[str, Any]] = await cur.fetchall()  # type: ignore[assignment]
 
-        # Pipeline def names (for card display)
-        cur = await conn.execute("SELECT id, name FROM pipeline_defs")
+        # Pipeline def names and stage graphs (for card display)
+        cur = await conn.execute("SELECT id, name, stage_graph_json FROM pipeline_defs")
         def_rows: list[dict[str, Any]] = await cur.fetchall()  # type: ignore[assignment]
         def_names: dict[int, str] = {row["id"]: row["name"] for row in def_rows}
+        def_graphs: dict[int, list[dict[str, str]]] = {}
+        for row in def_rows:
+            def_graphs[row["id"]] = _parse_mini_graph_nodes(row.get("stage_graph_json"))
 
     # Enrich each pipeline with computed data
     enriched: list[dict[str, Any]] = []
@@ -107,10 +129,19 @@ async def _fetch_dashboard_data() -> dict[str, Any]:
         htn_completed = htn.get("completed", 0)
         stage = stages_by_pipeline.get(pid)
 
+        # Build mini stage graph with active node marked
+        current_key = p.get("current_stage_key")
+        raw_nodes = def_graphs.get(p["pipeline_def_id"], [])
+        mini_graph = [
+            {**n, "is_active": n["key"] == current_key}
+            for n in raw_nodes
+        ]
+
         enriched.append({
             **p,
             "def_name": def_names.get(p["pipeline_def_id"], "unknown"),
             "stage": stage,
+            "mini_graph": mini_graph,
             "htn_total": htn_total,
             "htn_completed": htn_completed,
             "htn_in_progress": htn.get("in_progress", 0),

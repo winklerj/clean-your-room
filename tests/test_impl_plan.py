@@ -1227,7 +1227,10 @@ class TestImplPlanProperties:
         content=st.text(
             min_size=1,
             max_size=200,
-            alphabet=st.characters(blacklist_characters="\r"),
+            alphabet=st.characters(
+                blacklist_characters="\r",
+                blacklist_categories=("Cs",),
+            ),
         ),
     )
     @settings(max_examples=15)

@@ -439,3 +439,184 @@ async def test_dashboard_no_context_for_non_running(client):
     resp = await client.get("/")
     assert resp.status_code == 200
     assert "pipeline-card-context" not in resp.text
+
+
+# ---------------------------------------------------------------------------
+# Stage-graph mini-visualization tests
+# ---------------------------------------------------------------------------
+
+
+async def _seed_multi_stage_def(name: str = "multi-def") -> int:
+    """Create a pipeline def with multiple stage nodes for mini-viz testing."""
+    pool = get_pool()
+    graph = json.dumps({
+        "entry_stage": "spec_author",
+        "nodes": [
+            {"key": "spec_author", "name": "Spec", "type": "spec_author",
+             "agent": "claude", "prompt": "p1", "model": "m1", "max_iterations": 1},
+            {"key": "impl_plan", "name": "Plan", "type": "impl_plan",
+             "agent": "claude", "prompt": "p2", "model": "m1", "max_iterations": 1},
+            {"key": "impl_task", "name": "Implement", "type": "impl_task",
+             "agent": "claude", "prompt": "p3", "model": "m2", "max_iterations": 50},
+            {"key": "code_review", "name": "Review", "type": "code_review",
+             "agent": "codex", "prompt": "p4", "model": "m3", "max_iterations": 3},
+            {"key": "validation", "name": "Validate", "type": "validation",
+             "agent": "claude", "prompt": "p5", "model": "m2", "max_iterations": 3},
+        ],
+        "edges": [
+            {"key": "e1", "from": "spec_author", "to": "impl_plan", "on": "approved"},
+            {"key": "e2", "from": "impl_plan", "to": "impl_task", "on": "approved"},
+            {"key": "e3", "from": "impl_task", "to": "code_review",
+             "on": "stage_complete"},
+            {"key": "e4", "from": "code_review", "to": "validation", "on": "approved"},
+            {"key": "e5", "from": "validation", "to": "completed", "on": "validated"},
+        ],
+    })
+    async with pool.connection() as conn:
+        cur = await conn.execute(
+            "INSERT INTO pipeline_defs (name, stage_graph_json) "
+            "VALUES (%s, %s) RETURNING id",
+            (name, graph),
+        )
+        row = await cur.fetchone()
+        assert row is not None
+        await conn.commit()
+        return row["id"]
+
+
+@pytest.mark.asyncio
+async def test_dashboard_mini_graph_rendered(client):
+    """Pipeline card renders stage-graph-mini with all node names."""
+    repo_id = await _seed_repo()
+    def_id = await _seed_multi_stage_def()
+    await _seed_pipeline(repo_id, def_id, status="running",
+                         current_stage_key="impl_task")
+
+    resp = await client.get("/")
+    assert resp.status_code == 200
+    text = resp.text
+    assert "stage-graph-mini" in text
+    assert "Spec" in text
+    assert "Plan" in text
+    assert "Implement" in text
+    assert "Review" in text
+    assert "Validate" in text
+
+
+@pytest.mark.asyncio
+async def test_dashboard_mini_graph_active_node(client):
+    """Active stage node is marked with mini-node-active CSS class."""
+    repo_id = await _seed_repo()
+    def_id = await _seed_multi_stage_def()
+    await _seed_pipeline(repo_id, def_id, status="running",
+                         current_stage_key="code_review")
+
+    resp = await client.get("/")
+    assert resp.status_code == 200
+    text = resp.text
+    # The Review node should have the active class
+    assert 'mini-node-active' in text
+    # Verify active node is Review (code_review key maps to "Review" name)
+    active_pos = text.find("mini-node-active")
+    assert active_pos != -1
+    # Find the node text near the active class
+    snippet = text[active_pos:active_pos + 100]
+    assert "Review" in snippet
+
+
+@pytest.mark.asyncio
+async def test_dashboard_mini_graph_no_active_when_completed(client):
+    """Completed pipeline has no active node in mini graph."""
+    repo_id = await _seed_repo()
+    def_id = await _seed_multi_stage_def()
+    await _seed_pipeline(repo_id, def_id, status="completed",
+                         current_stage_key=None)
+
+    resp = await client.get("/")
+    assert resp.status_code == 200
+    text = resp.text
+    assert "stage-graph-mini" in text
+    assert "mini-node-active" not in text
+
+
+@pytest.mark.asyncio
+async def test_dashboard_mini_graph_single_node(client):
+    """Single-node pipeline def still renders mini graph."""
+    repo_id = await _seed_repo()
+    def_id = await _seed_pipeline_def()  # single-node: spec_author only
+    await _seed_pipeline(repo_id, def_id, status="running",
+                         current_stage_key="spec_author")
+
+    resp = await client.get("/")
+    assert resp.status_code == 200
+    text = resp.text
+    assert "stage-graph-mini" in text
+    assert "Spec" in text
+    # Single node means no arrows
+    assert "mini-arrow" not in text
+
+
+@pytest.mark.asyncio
+async def test_dashboard_mini_graph_arrows_between_nodes(client):
+    """Multi-node graph has arrow separators between nodes."""
+    repo_id = await _seed_repo()
+    def_id = await _seed_multi_stage_def()
+    await _seed_pipeline(repo_id, def_id, status="running",
+                         current_stage_key="spec_author")
+
+    resp = await client.get("/")
+    assert resp.status_code == 200
+    # 5 nodes = 4 arrows
+    assert resp.text.count("mini-arrow") == 4
+
+
+@pytest.mark.asyncio
+async def test_dashboard_mini_graph_multiple_pipelines(client):
+    """Each pipeline card gets its own mini graph from its definition."""
+    repo_id = await _seed_repo()
+    single_def = await _seed_pipeline_def(name="single-def")
+    multi_def = await _seed_multi_stage_def(name="multi-def")
+    await _seed_pipeline(repo_id, single_def, status="running",
+                         clone_path="/tmp/c1", current_stage_key="spec_author")
+    await _seed_pipeline(repo_id, multi_def, status="running",
+                         clone_path="/tmp/c2", current_stage_key="impl_task")
+
+    resp = await client.get("/")
+    assert resp.status_code == 200
+    text = resp.text
+    # Both pipeline cards should have mini graphs
+    assert text.count("stage-graph-mini") == 2
+
+
+@pytest.mark.asyncio
+async def test_parse_mini_graph_nodes_invalid_json():
+    """_parse_mini_graph_nodes handles invalid JSON gracefully."""
+    from build_your_room.routes.dashboard import _parse_mini_graph_nodes
+
+    assert _parse_mini_graph_nodes(None) == []
+    assert _parse_mini_graph_nodes("") == []
+    assert _parse_mini_graph_nodes("not json") == []
+    assert _parse_mini_graph_nodes("{}") == []
+    assert _parse_mini_graph_nodes('{"nodes": "bad"}') == []
+
+
+@pytest.mark.asyncio
+async def test_parse_mini_graph_nodes_valid():
+    """_parse_mini_graph_nodes extracts key and name from nodes."""
+    import json as json_mod
+    from build_your_room.routes.dashboard import _parse_mini_graph_nodes
+
+    graph_json = json_mod.dumps({
+        "entry_stage": "a",
+        "nodes": [
+            {"key": "a", "name": "Alpha", "type": "t", "agent": "claude",
+             "prompt": "p", "model": "m", "max_iterations": 1},
+            {"key": "b", "name": "Beta", "type": "t", "agent": "claude",
+             "prompt": "p", "model": "m", "max_iterations": 1},
+        ],
+        "edges": [],
+    })
+    result = _parse_mini_graph_nodes(graph_json)
+    assert len(result) == 2
+    assert result[0] == {"key": "a", "name": "Alpha"}
+    assert result[1] == {"key": "b", "name": "Beta"}

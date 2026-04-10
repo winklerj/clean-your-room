@@ -85,6 +85,11 @@ input[type="text"], input[type="url"], input[type="number"] { width: 100%; paddi
 
 .pipeline-card-repo { font-size: 0.85em; color: #888; margin-bottom: 0.5rem; }
 
+.stage-graph-mini { display: flex; align-items: center; gap: 0.2rem; margin-bottom: 0.5rem; flex-wrap: wrap; }
+.mini-node { font-size: 0.7em; padding: 0.15rem 0.4rem; border: 1px solid #ddd; border-radius: 10px; background: #f5f5f5; color: #888; white-space: nowrap; }
+.mini-node-active { border-color: #3498db; background: #d0e8ff; color: #1a6fad; font-weight: 600; }
+.mini-arrow { font-size: 0.65em; color: #bbb; }
+
 .pipeline-card-stage { margin-bottom: 0.5rem; font-size: 0.9em; }
 .stage-type { font-weight: 600; color: #555; }
 .stage-progress { color: #888; font-size: 0.9em; margin-left: 0.25rem; }
