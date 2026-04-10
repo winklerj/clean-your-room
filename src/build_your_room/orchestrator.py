@@ -21,11 +21,7 @@ from build_your_room.config import (
 from build_your_room.lease_manager import LeaseManager
 from build_your_room.recovery import RecoveryManager
 from build_your_room.stage_graph import StageGraph
-from build_your_room.stages.code_review import run_code_review_stage
-from build_your_room.stages.impl_plan import run_impl_plan_stage
-from build_your_room.stages.impl_task import run_impl_task_stage
-from build_your_room.stages.spec_author import run_spec_author_stage
-from build_your_room.stages.validation import run_validation_stage
+from build_your_room.stages import get_stage_runner
 from build_your_room.streaming import LogBuffer
 
 logger = logging.getLogger(__name__)
@@ -387,49 +383,10 @@ class PipelineOrchestrator:
             # For skeleton: return a default result based on stage type
             return self._default_stage_result(node.stage_type)
 
-        # Dispatch to stage-specific runners
-        if node.stage_type == "spec_author" and stage_id is not None:
-            result = await run_spec_author_stage(
-                pool=self._pool,
-                pipeline_id=pipeline_id,
-                stage_id=stage_id,
-                node=node,
-                adapters=self._adapters,
-                log_buffer=self._log_buffer,
-                cancel_event=cancel_event,
-            )
-        elif node.stage_type == "impl_plan" and stage_id is not None:
-            result = await run_impl_plan_stage(
-                pool=self._pool,
-                pipeline_id=pipeline_id,
-                stage_id=stage_id,
-                node=node,
-                adapters=self._adapters,
-                log_buffer=self._log_buffer,
-                cancel_event=cancel_event,
-            )
-        elif node.stage_type == "impl_task" and stage_id is not None:
-            result = await run_impl_task_stage(
-                pool=self._pool,
-                pipeline_id=pipeline_id,
-                stage_id=stage_id,
-                node=node,
-                adapters=self._adapters,
-                log_buffer=self._log_buffer,
-                cancel_event=cancel_event,
-            )
-        elif node.stage_type == "code_review" and stage_id is not None:
-            result = await run_code_review_stage(
-                pool=self._pool,
-                pipeline_id=pipeline_id,
-                stage_id=stage_id,
-                node=node,
-                adapters=self._adapters,
-                log_buffer=self._log_buffer,
-                cancel_event=cancel_event,
-            )
-        elif node.stage_type == "validation" and stage_id is not None:
-            result = await run_validation_stage(
+        # Dispatch to stage-specific runners via registry
+        runner = get_stage_runner(node.stage_type) if stage_id is not None else None
+        if runner is not None:
+            result = await runner(
                 pool=self._pool,
                 pipeline_id=pipeline_id,
                 stage_id=stage_id,

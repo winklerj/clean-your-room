@@ -62,6 +62,7 @@ uv run uvicorn build_your_room.main:app --reload --port 8317  # Run dev server
 - **CodexAppServerAdapter** — stdio JSON-RPC protocol, subprocess lifecycle, handshake, thread management
 
 ### Stage runners (`stages/`)
+- **base.py** — StageRunnerFn type, STAGE_RUNNERS registry, register/get helpers; orchestrator dispatches via registry
 - **spec_author.py** — spec authoring + optional review loop
 - **impl_plan.py** — implementation plan + HTN task graph population from structured output
 - **impl_task.py** — claim loop with context rotation, postcondition verification, resume

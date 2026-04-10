@@ -497,3 +497,12 @@ async def _create_escalation(
 
 def _log(log_buffer: LogBuffer, pipeline_id: int, message: str) -> None:
     log_buffer.append(pipeline_id, f"[code_review] {message}")
+
+
+# ---------------------------------------------------------------------------
+# Self-registration
+# ---------------------------------------------------------------------------
+
+from build_your_room.stages.base import register_stage_runner  # noqa: E402
+
+register_stage_runner("code_review", run_code_review_stage)

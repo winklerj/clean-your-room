@@ -521,3 +521,12 @@ def _load_spec_artifact(pipelines_dir: Path, pipeline_id: int) -> str | None:
 
 def _log(log_buffer: LogBuffer, pipeline_id: int, message: str) -> None:
     log_buffer.append(pipeline_id, f"[impl_plan] {message}")
+
+
+# ---------------------------------------------------------------------------
+# Self-registration
+# ---------------------------------------------------------------------------
+
+from build_your_room.stages.base import register_stage_runner  # noqa: E402
+
+register_stage_runner("impl_plan", run_impl_plan_stage)

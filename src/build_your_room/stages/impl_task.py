@@ -611,3 +611,12 @@ def _utc_now() -> datetime:
 
 def _log(log_buffer: LogBuffer, pipeline_id: int, message: str) -> None:
     log_buffer.append(pipeline_id, f"[impl_task] {message}")
+
+
+# ---------------------------------------------------------------------------
+# Self-registration
+# ---------------------------------------------------------------------------
+
+from build_your_room.stages.base import register_stage_runner  # noqa: E402
+
+register_stage_runner("impl_task", run_impl_task_stage)

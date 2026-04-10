@@ -392,13 +392,13 @@ class TestFullPipelineLifecycle:
         pool = get_pool()
         pid = await _seed_full_pipeline(pool, clone_path=str(tmp_path / "clone"))
 
-        with (
-            patch("build_your_room.orchestrator.run_spec_author_stage", return_value=STAGE_RESULT_APPROVED),
-            patch("build_your_room.orchestrator.run_impl_plan_stage", return_value=STAGE_RESULT_APPROVED),
-            patch("build_your_room.orchestrator.run_impl_task_stage", return_value=STAGE_RESULT_STAGE_COMPLETE),
-            patch("build_your_room.orchestrator.run_code_review_stage", return_value=STAGE_RESULT_APPROVED),
-            patch("build_your_room.orchestrator.run_validation_stage", return_value=STAGE_RESULT_VALIDATED),
-        ):
+        with patch.dict("build_your_room.stages.base.STAGE_RUNNERS", {
+            "spec_author": AsyncMock(return_value=STAGE_RESULT_APPROVED),
+            "impl_plan": AsyncMock(return_value=STAGE_RESULT_APPROVED),
+            "impl_task": AsyncMock(return_value=STAGE_RESULT_STAGE_COMPLETE),
+            "code_review": AsyncMock(return_value=STAGE_RESULT_APPROVED),
+            "validation": AsyncMock(return_value=STAGE_RESULT_VALIDATED),
+        }):
             orch = PipelineOrchestrator(
                 pool, log_buffer,
                 adapters={"claude": _make_mock_adapter(), "codex": _make_mock_adapter()},
@@ -526,10 +526,9 @@ class TestEscalationAndCancellation:
         claude_adapter = _make_mock_adapter(claude_session)
 
         # Patch the spec_author stage to return escalated
-        with patch(
-            "build_your_room.orchestrator.run_spec_author_stage",
-            return_value=STAGE_RESULT_ESCALATED,
-        ):
+        with patch.dict("build_your_room.stages.base.STAGE_RUNNERS", {
+            "spec_author": AsyncMock(return_value=STAGE_RESULT_ESCALATED),
+        }):
             orch = PipelineOrchestrator(
                 pool, log_buffer,
                 adapters={"claude": claude_adapter},
@@ -565,16 +564,13 @@ class TestEscalationAndCancellation:
         # The patch must span both the initial run AND the resume, since
         # resume_pipeline creates a new asyncio task that re-enters the
         # orchestrator loop. Keep the context manager open throughout.
-        with (
-            patch(
-                "build_your_room.orchestrator.run_spec_author_stage",
-                side_effect=spec_author_side_effect,
-            ),
-            patch("build_your_room.orchestrator.run_impl_plan_stage", return_value=STAGE_RESULT_APPROVED),
-            patch("build_your_room.orchestrator.run_impl_task_stage", return_value=STAGE_RESULT_STAGE_COMPLETE),
-            patch("build_your_room.orchestrator.run_code_review_stage", return_value=STAGE_RESULT_APPROVED),
-            patch("build_your_room.orchestrator.run_validation_stage", return_value=STAGE_RESULT_VALIDATED),
-        ):
+        with patch.dict("build_your_room.stages.base.STAGE_RUNNERS", {
+            "spec_author": AsyncMock(side_effect=spec_author_side_effect),
+            "impl_plan": AsyncMock(return_value=STAGE_RESULT_APPROVED),
+            "impl_task": AsyncMock(return_value=STAGE_RESULT_STAGE_COMPLETE),
+            "code_review": AsyncMock(return_value=STAGE_RESULT_APPROVED),
+            "validation": AsyncMock(return_value=STAGE_RESULT_VALIDATED),
+        }):
             orch = PipelineOrchestrator(
                 pool, log_buffer,
                 adapters={"claude": _make_mock_adapter(), "codex": _make_mock_adapter()},
@@ -627,10 +623,9 @@ class TestEscalationAndCancellation:
             await asyncio.sleep(5)
             return STAGE_RESULT_APPROVED
 
-        with patch(
-            "build_your_room.orchestrator.run_spec_author_stage",
-            side_effect=slow_spec_author,
-        ):
+        with patch.dict("build_your_room.stages.base.STAGE_RUNNERS", {
+            "spec_author": AsyncMock(side_effect=slow_spec_author),
+        }):
             orch = PipelineOrchestrator(
                 pool, log_buffer,
                 adapters={"claude": _make_mock_adapter()},
@@ -675,10 +670,9 @@ class TestEscalationAndCancellation:
             await asyncio.sleep(10)
             return STAGE_RESULT_APPROVED
 
-        with patch(
-            "build_your_room.orchestrator.run_spec_author_stage",
-            side_effect=slow_spec_author,
-        ):
+        with patch.dict("build_your_room.stages.base.STAGE_RUNNERS", {
+            "spec_author": AsyncMock(side_effect=slow_spec_author),
+        }):
             orch = PipelineOrchestrator(
                 pool, log_buffer,
                 adapters={"claude": _make_mock_adapter()},
@@ -975,28 +969,13 @@ class TestStageTransitions:
                 return STAGE_RESULT_VALIDATION_FAILED
             return STAGE_RESULT_VALIDATED
 
-        with (
-            patch(
-                "build_your_room.orchestrator.run_spec_author_stage",
-                return_value=STAGE_RESULT_APPROVED,
-            ),
-            patch(
-                "build_your_room.orchestrator.run_impl_plan_stage",
-                return_value=STAGE_RESULT_APPROVED,
-            ),
-            patch(
-                "build_your_room.orchestrator.run_impl_task_stage",
-                return_value=STAGE_RESULT_STAGE_COMPLETE,
-            ),
-            patch(
-                "build_your_room.orchestrator.run_code_review_stage",
-                return_value=STAGE_RESULT_APPROVED,
-            ),
-            patch(
-                "build_your_room.orchestrator.run_validation_stage",
-                side_effect=mock_validation,
-            ),
-        ):
+        with patch.dict("build_your_room.stages.base.STAGE_RUNNERS", {
+            "spec_author": AsyncMock(return_value=STAGE_RESULT_APPROVED),
+            "impl_plan": AsyncMock(return_value=STAGE_RESULT_APPROVED),
+            "impl_task": AsyncMock(return_value=STAGE_RESULT_STAGE_COMPLETE),
+            "code_review": AsyncMock(return_value=STAGE_RESULT_APPROVED),
+            "validation": AsyncMock(side_effect=mock_validation),
+        }):
             orch = PipelineOrchestrator(
                 pool, log_buffer,
                 adapters={"claude": _make_mock_adapter(), "codex": _make_mock_adapter()},
@@ -1038,28 +1017,13 @@ class TestStageTransitions:
         pid = await _seed_full_pipeline(pool, clone_path=str(tmp_path / "clone"), suffix="-exhaust1")
 
         # Validation always fails → back-edge gets exhausted after max_visits=2
-        with (
-            patch(
-                "build_your_room.orchestrator.run_spec_author_stage",
-                return_value=STAGE_RESULT_APPROVED,
-            ),
-            patch(
-                "build_your_room.orchestrator.run_impl_plan_stage",
-                return_value=STAGE_RESULT_APPROVED,
-            ),
-            patch(
-                "build_your_room.orchestrator.run_impl_task_stage",
-                return_value=STAGE_RESULT_STAGE_COMPLETE,
-            ),
-            patch(
-                "build_your_room.orchestrator.run_code_review_stage",
-                return_value=STAGE_RESULT_APPROVED,
-            ),
-            patch(
-                "build_your_room.orchestrator.run_validation_stage",
-                return_value=STAGE_RESULT_VALIDATION_FAILED,
-            ),
-        ):
+        with patch.dict("build_your_room.stages.base.STAGE_RUNNERS", {
+            "spec_author": AsyncMock(return_value=STAGE_RESULT_APPROVED),
+            "impl_plan": AsyncMock(return_value=STAGE_RESULT_APPROVED),
+            "impl_task": AsyncMock(return_value=STAGE_RESULT_STAGE_COMPLETE),
+            "code_review": AsyncMock(return_value=STAGE_RESULT_APPROVED),
+            "validation": AsyncMock(return_value=STAGE_RESULT_VALIDATION_FAILED),
+        }):
             orch = PipelineOrchestrator(
                 pool, log_buffer,
                 adapters={"claude": _make_mock_adapter(), "codex": _make_mock_adapter()},
@@ -1088,10 +1052,9 @@ class TestStageTransitions:
         pid = await _seed_full_pipeline(pool, clone_path=str(tmp_path / "clone"), suffix="-noedge1")
 
         # spec_author returns an unexpected result
-        with patch(
-            "build_your_room.orchestrator.run_spec_author_stage",
-            return_value="unexpected_result_xyz",
-        ):
+        with patch.dict("build_your_room.stages.base.STAGE_RUNNERS", {
+            "spec_author": AsyncMock(return_value="unexpected_result_xyz"),
+        }):
             orch = PipelineOrchestrator(
                 pool, log_buffer,
                 adapters={"claude": _make_mock_adapter()},
@@ -1132,13 +1095,13 @@ class TestStageTransitions:
             call_counts["code_review"] += 1
             return STAGE_RESULT_APPROVED
 
-        with (
-            patch("build_your_room.orchestrator.run_spec_author_stage", return_value=STAGE_RESULT_APPROVED),
-            patch("build_your_room.orchestrator.run_impl_plan_stage", return_value=STAGE_RESULT_APPROVED),
-            patch("build_your_room.orchestrator.run_impl_task_stage", return_value=STAGE_RESULT_STAGE_COMPLETE),
-            patch("build_your_room.orchestrator.run_code_review_stage", side_effect=mock_code_review),
-            patch("build_your_room.orchestrator.run_validation_stage", side_effect=mock_validation),
-        ):
+        with patch.dict("build_your_room.stages.base.STAGE_RUNNERS", {
+            "spec_author": AsyncMock(return_value=STAGE_RESULT_APPROVED),
+            "impl_plan": AsyncMock(return_value=STAGE_RESULT_APPROVED),
+            "impl_task": AsyncMock(return_value=STAGE_RESULT_STAGE_COMPLETE),
+            "code_review": AsyncMock(side_effect=mock_code_review),
+            "validation": AsyncMock(side_effect=mock_validation),
+        }):
             orch = PipelineOrchestrator(
                 pool, log_buffer,
                 adapters={"claude": _make_mock_adapter(), "codex": _make_mock_adapter()},
@@ -1206,13 +1169,13 @@ class TestIntegrationProperties:
         if escalate_at != "none":
             stage_results[escalate_at] = STAGE_RESULT_ESCALATED
 
-        with (
-            patch("build_your_room.orchestrator.run_spec_author_stage", return_value=stage_results["spec_author"]),
-            patch("build_your_room.orchestrator.run_impl_plan_stage", return_value=stage_results["impl_plan"]),
-            patch("build_your_room.orchestrator.run_impl_task_stage", return_value=stage_results["impl_task"]),
-            patch("build_your_room.orchestrator.run_code_review_stage", return_value=stage_results["code_review"]),
-            patch("build_your_room.orchestrator.run_validation_stage", return_value=stage_results["validation"]),
-        ):
+        with patch.dict("build_your_room.stages.base.STAGE_RUNNERS", {
+            "spec_author": AsyncMock(return_value=stage_results["spec_author"]),
+            "impl_plan": AsyncMock(return_value=stage_results["impl_plan"]),
+            "impl_task": AsyncMock(return_value=stage_results["impl_task"]),
+            "code_review": AsyncMock(return_value=stage_results["code_review"]),
+            "validation": AsyncMock(return_value=stage_results["validation"]),
+        }):
             orch = PipelineOrchestrator(
                 pool, log_buffer,
                 adapters={"claude": _make_mock_adapter(), "codex": _make_mock_adapter()},
@@ -1258,13 +1221,13 @@ class TestIntegrationProperties:
                 return STAGE_RESULT_VALIDATION_FAILED
             return STAGE_RESULT_VALIDATED
 
-        with (
-            patch("build_your_room.orchestrator.run_spec_author_stage", return_value=STAGE_RESULT_APPROVED),
-            patch("build_your_room.orchestrator.run_impl_plan_stage", return_value=STAGE_RESULT_APPROVED),
-            patch("build_your_room.orchestrator.run_impl_task_stage", return_value=STAGE_RESULT_STAGE_COMPLETE),
-            patch("build_your_room.orchestrator.run_code_review_stage", return_value=STAGE_RESULT_APPROVED),
-            patch("build_your_room.orchestrator.run_validation_stage", side_effect=mock_validation),
-        ):
+        with patch.dict("build_your_room.stages.base.STAGE_RUNNERS", {
+            "spec_author": AsyncMock(return_value=STAGE_RESULT_APPROVED),
+            "impl_plan": AsyncMock(return_value=STAGE_RESULT_APPROVED),
+            "impl_task": AsyncMock(return_value=STAGE_RESULT_STAGE_COMPLETE),
+            "code_review": AsyncMock(return_value=STAGE_RESULT_APPROVED),
+            "validation": AsyncMock(side_effect=mock_validation),
+        }):
             orch = PipelineOrchestrator(
                 pool, log_buffer,
                 adapters={"claude": _make_mock_adapter(), "codex": _make_mock_adapter()},
@@ -1330,13 +1293,13 @@ class TestIntegrationProperties:
             else:
                 stage_results[st_name] = STAGE_RESULT_ESCALATED
 
-        with (
-            patch("build_your_room.orchestrator.run_spec_author_stage", return_value=stage_results["spec_author"]),
-            patch("build_your_room.orchestrator.run_impl_plan_stage", return_value=stage_results["impl_plan"]),
-            patch("build_your_room.orchestrator.run_impl_task_stage", return_value=stage_results["impl_task"]),
-            patch("build_your_room.orchestrator.run_code_review_stage", return_value=stage_results["code_review"]),
-            patch("build_your_room.orchestrator.run_validation_stage", return_value=stage_results["validation"]),
-        ):
+        with patch.dict("build_your_room.stages.base.STAGE_RUNNERS", {
+            "spec_author": AsyncMock(return_value=stage_results["spec_author"]),
+            "impl_plan": AsyncMock(return_value=stage_results["impl_plan"]),
+            "impl_task": AsyncMock(return_value=stage_results["impl_task"]),
+            "code_review": AsyncMock(return_value=stage_results["code_review"]),
+            "validation": AsyncMock(return_value=stage_results["validation"]),
+        }):
             orch = PipelineOrchestrator(
                 pool, log_buffer,
                 adapters={"claude": _make_mock_adapter(), "codex": _make_mock_adapter()},
@@ -1434,10 +1397,10 @@ class TestSpecToPlanChain:
             plan_artifact.write_text(plan_content)
             return STAGE_RESULT_APPROVED
 
-        with (
-            patch("build_your_room.orchestrator.run_spec_author_stage", side_effect=mock_spec_author),
-            patch("build_your_room.orchestrator.run_impl_plan_stage", side_effect=mock_impl_plan),
-        ):
+        with patch.dict("build_your_room.stages.base.STAGE_RUNNERS", {
+            "spec_author": AsyncMock(side_effect=mock_spec_author),
+            "impl_plan": AsyncMock(side_effect=mock_impl_plan),
+        }):
             orch = PipelineOrchestrator(
                 pool, log_buffer,
                 adapters={"claude": _make_mock_adapter()},
@@ -1485,13 +1448,13 @@ class TestConcurrentPipelines:
             pool, clone_path=str(tmp_path / "clone2"), suffix="-par2",
         )
 
-        with (
-            patch("build_your_room.orchestrator.run_spec_author_stage", return_value=STAGE_RESULT_APPROVED),
-            patch("build_your_room.orchestrator.run_impl_plan_stage", return_value=STAGE_RESULT_APPROVED),
-            patch("build_your_room.orchestrator.run_impl_task_stage", return_value=STAGE_RESULT_STAGE_COMPLETE),
-            patch("build_your_room.orchestrator.run_code_review_stage", return_value=STAGE_RESULT_APPROVED),
-            patch("build_your_room.orchestrator.run_validation_stage", return_value=STAGE_RESULT_VALIDATED),
-        ):
+        with patch.dict("build_your_room.stages.base.STAGE_RUNNERS", {
+            "spec_author": AsyncMock(return_value=STAGE_RESULT_APPROVED),
+            "impl_plan": AsyncMock(return_value=STAGE_RESULT_APPROVED),
+            "impl_task": AsyncMock(return_value=STAGE_RESULT_STAGE_COMPLETE),
+            "code_review": AsyncMock(return_value=STAGE_RESULT_APPROVED),
+            "validation": AsyncMock(return_value=STAGE_RESULT_VALIDATED),
+        }):
             orch = PipelineOrchestrator(
                 pool, log_buffer,
                 adapters={"claude": _make_mock_adapter(), "codex": _make_mock_adapter()},
