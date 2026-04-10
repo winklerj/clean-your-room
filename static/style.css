@@ -8,12 +8,12 @@ textarea { font-family: monospace; width: 100%; }
 button { cursor: pointer; padding: 0.25rem 0.75rem; }
 label { display: block; margin: 0.5rem 0; }
 input[type="text"], input[type="url"], input[type="number"] { width: 100%; padding: 0.25rem; }
-.status-badge { padding: 0.15rem 0.5rem; border-radius: 3px; font-size: 0.85em; }
-.status-running { background: #dff0d8; }
-.status-completed { background: #d9edf7; }
-.status-stopped { background: #fcf8e3; }
-.status-failed { background: #f2dede; }
-.status-pending { background: #eee; }
+.status-badge { padding: 0.15rem 0.5rem; border-radius: 3px; font-size: 0.85em; font-weight: 600; }
+.status-running { background: #d0e8ff; color: #1a5276; }
+.status-completed { background: #d4edda; color: #155724; }
+.status-stopped { background: #fcf8e3; color: #856404; }
+.status-failed { background: #f8d7da; color: #721c24; }
+.status-pending { background: #eee; color: #666; }
 .log-stream { background: #1e1e1e; color: #d4d4d4; font-family: monospace; font-size: 0.85em; padding: 1rem; height: 600px; overflow-y: auto; }
 .log-msg { padding: 0.4rem 0.6rem; margin: 0.2rem 0; border-left: 3px solid transparent; white-space: pre-wrap; word-wrap: break-word; border-radius: 2px; }
 .log-label { font-weight: 700; margin-right: 0.5rem; font-size: 0.8em; text-transform: uppercase; }
@@ -34,8 +34,8 @@ input[type="text"], input[type="url"], input[type="number"] { width: 100%; paddi
 .stat-number { font-size: 2rem; font-weight: 700; line-height: 1.2; }
 .stat-label { font-size: 0.85em; color: #666; margin-top: 0.25rem; }
 .stat-card-total { border-top-color: #555; }
-.stat-card-running { border-top-color: #5cb85c; }
-.stat-card-completed { border-top-color: #5bc0de; }
+.stat-card-running { border-top-color: #3498db; }
+.stat-card-completed { border-top-color: #27ae60; }
 .stat-card-failed { border-top-color: #d9534f; }
 
 /* Progress bar */
@@ -55,3 +55,66 @@ input[type="text"], input[type="url"], input[type="number"] { width: 100%; paddi
 /* Run again button */
 .btn-run-again { font-size: 0.8em; padding: 0.2rem 0.6rem; border: 1px solid #ccc; border-radius: 3px; background: #fff; cursor: pointer; }
 .btn-run-again:hover { background: #f5f5f5; border-color: #999; }
+
+/* Escalation banner */
+.escalation-banner { background: #fff3cd; border: 1px solid #ffc107; border-radius: 6px; padding: 0.75rem 1rem; margin-bottom: 1.5rem; text-align: center; font-weight: 600; }
+.escalation-banner a { color: #856404; text-decoration: none; }
+.escalation-banner a:hover { text-decoration: underline; }
+
+/* Additional stat card variants */
+.stat-card-attention { border-top-color: #f0ad4e; }
+.stats-cards { grid-template-columns: repeat(5, 1fr); }
+
+/* Pipeline cards grid */
+.pipeline-cards-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 1rem; margin-bottom: 2rem; }
+
+.pipeline-card { border: 1px solid #ddd; border-radius: 8px; padding: 1rem; background: #fff; border-left: 4px solid #ccc; }
+.pipeline-card-running { border-left-color: #3498db; }
+.pipeline-card-completed { border-left-color: #27ae60; }
+.pipeline-card-failed { border-left-color: #d9534f; }
+.pipeline-card-needs_attention { border-left-color: #f0ad4e; }
+.pipeline-card-paused { border-left-color: #999; }
+.pipeline-card-pending { border-left-color: #ccc; }
+.pipeline-card-cancelled { border-left-color: #6c757d; }
+.pipeline-card-killed { border-left-color: #333; }
+.pipeline-card-cancel_requested { border-left-color: #6c757d; }
+
+.pipeline-card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; }
+.pipeline-card-title { font-weight: 700; font-size: 1.05em; text-decoration: none; color: #333; }
+.pipeline-card-title:hover { color: #0366d6; }
+
+.pipeline-card-repo { font-size: 0.85em; color: #888; margin-bottom: 0.5rem; }
+
+.pipeline-card-stage { margin-bottom: 0.5rem; font-size: 0.9em; }
+.stage-type { font-weight: 600; color: #555; }
+.stage-progress { color: #888; font-size: 0.9em; margin-left: 0.25rem; }
+
+.pipeline-card-htn { margin-bottom: 0.5rem; }
+.htn-summary { font-size: 0.85em; color: #666; }
+.htn-active { color: #3498db; }
+.htn-failed-count { color: #d9534f; }
+.progress-htn { background: #27ae60; }
+
+.pipeline-card-context { margin-bottom: 0.5rem; }
+.progress-ctx-ok { background: #27ae60; }
+.progress-ctx-warn { background: #f0ad4e; }
+.progress-ctx-high { background: #d9534f; }
+
+.pipeline-card-footer { display: flex; gap: 0.75rem; align-items: center; border-top: 1px solid #eee; padding-top: 0.5rem; margin-top: 0.5rem; font-size: 0.8em; color: #888; }
+.lease-health { color: #d9534f; }
+.pipeline-cost { font-weight: 600; color: #555; }
+.pipeline-updated { margin-left: auto; }
+
+.pipeline-card-actions { border-top: 1px solid #eee; padding-top: 0.5rem; margin-top: 0.5rem; }
+.btn-cleanup { font-size: 0.75em; padding: 0.2rem 0.5rem; border: 1px solid #ccc; border-radius: 3px; background: #fff; cursor: pointer; color: #666; }
+.btn-cleanup:hover { background: #f5f5f5; border-color: #999; color: #333; }
+
+/* Status badges — extended for new pipeline statuses */
+.status-needs_attention { background: #fff3cd; color: #856404; }
+.status-paused { background: #e2e3e5; color: #383d41; }
+.status-cancelled { background: #d6d8db; color: #383d41; }
+.status-killed { background: #333; color: #fff; }
+.status-cancel_requested { background: #d6d8db; color: #383d41; }
+
+/* Empty state */
+.empty-state { color: #888; font-style: italic; }

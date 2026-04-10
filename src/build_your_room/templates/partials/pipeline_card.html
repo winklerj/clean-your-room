@@ -1,0 +1,72 @@
+<div class="pipeline-card pipeline-card-{{ pipeline.status }}" id="pipeline-{{ pipeline.id }}">
+    <div class="pipeline-card-header">
+        <a href="/pipelines/{{ pipeline.id }}" class="pipeline-card-title">
+            {{ pipeline.def_name }}
+        </a>
+        <span class="status-badge status-{{ pipeline.status }}">{{ pipeline.status }}</span>
+    </div>
+
+    <div class="pipeline-card-repo">{{ pipeline.repo_name }}</div>
+
+    {% if pipeline.stage %}
+    <div class="pipeline-card-stage">
+        <span class="stage-type">{{ pipeline.stage.stage_type }}</span>
+        {% if pipeline.stage.max_iterations > 1 %}
+        <span class="stage-progress">
+            round {{ pipeline.stage.iteration }}/{{ pipeline.stage.max_iterations }}
+        </span>
+        {% endif %}
+    </div>
+    {% elif pipeline.current_stage_key %}
+    <div class="pipeline-card-stage">
+        <span class="stage-type">{{ pipeline.current_stage_key }}</span>
+    </div>
+    {% endif %}
+
+    {% if pipeline.htn_total > 0 %}
+    <div class="pipeline-card-htn">
+        <div class="progress-bar">
+            <div class="progress-fill progress-htn" style="width: {{ pipeline.htn_pct }}%"></div>
+        </div>
+        <div class="htn-summary">
+            {{ pipeline.htn_completed }}/{{ pipeline.htn_total }} tasks
+            {% if pipeline.htn_in_progress > 0 %}
+            &middot; <span class="htn-active">{{ pipeline.htn_in_progress }} active</span>
+            {% endif %}
+            {% if pipeline.htn_failed > 0 %}
+            &middot; <span class="htn-failed-count">{{ pipeline.htn_failed }} failed</span>
+            {% endif %}
+        </div>
+    </div>
+    {% endif %}
+
+    {% if pipeline.context_usage_pct is not none and pipeline.status == 'running' %}
+    <div class="pipeline-card-context">
+        <div class="progress-bar">
+            <div class="progress-fill {% if pipeline.context_usage_pct > 80 %}progress-ctx-high{% elif pipeline.context_usage_pct > 60 %}progress-ctx-warn{% else %}progress-ctx-ok{% endif %}"
+                 style="width: {{ pipeline.context_usage_pct }}%"></div>
+        </div>
+        <div class="progress-text">context {{ "%.0f"|format(pipeline.context_usage_pct) }}%</div>
+    </div>
+    {% endif %}
+
+    <div class="pipeline-card-footer">
+        {% if pipeline.status == 'running' and pipeline.last_heartbeat_at %}
+        <span class="lease-health" title="Last heartbeat">&#x2764;</span>
+        {% endif %}
+        <span class="pipeline-cost">${{ "%.2f"|format(pipeline.total_cost) }}</span>
+        <span class="pipeline-updated">{{ pipeline.updated_at }}</span>
+    </div>
+
+    {% if pipeline.is_terminal %}
+    <div class="pipeline-card-actions">
+        <button class="btn-cleanup"
+                hx-post="/pipelines/{{ pipeline.id }}/cleanup"
+                hx-target="#pipeline-{{ pipeline.id }}"
+                hx-swap="outerHTML"
+                hx-confirm="Delete clone for this pipeline?">
+            Clean up clone
+        </button>
+    </div>
+    {% endif %}
+</div>

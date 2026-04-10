@@ -3,13 +3,49 @@
 {% block content %}
 <h1>Build Your Room</h1>
 
+{% if open_escalations > 0 %}
+<div class="escalation-banner">
+    <a href="/escalations">
+        {{ open_escalations }} pipeline{{ "s" if open_escalations != 1 else "" }} need{{ "s" if open_escalations == 1 else "" }} your attention
+    </a>
+</div>
+{% endif %}
+
 <div class="stats-cards">
     <div class="stat-card stat-card-total">
-        <div class="stat-number">{{ total_repos }}</div>
-        <div class="stat-label">Repos</div>
+        <div class="stat-number">{{ total_pipelines }}</div>
+        <div class="stat-label">Pipelines</div>
+    </div>
+    <div class="stat-card stat-card-running">
+        <div class="stat-number">{{ status_counts.get('running', 0) }}</div>
+        <div class="stat-label">Running</div>
+    </div>
+    <div class="stat-card stat-card-attention">
+        <div class="stat-number">{{ status_counts.get('needs_attention', 0) }}</div>
+        <div class="stat-label">Needs Attention</div>
+    </div>
+    <div class="stat-card stat-card-completed">
+        <div class="stat-number">{{ status_counts.get('completed', 0) }}</div>
+        <div class="stat-label">Completed</div>
+    </div>
+    <div class="stat-card stat-card-failed">
+        <div class="stat-number">{{ status_counts.get('failed', 0) }}</div>
+        <div class="stat-label">Failed</div>
     </div>
 </div>
 
+{% if pipelines %}
+<h2>Pipelines</h2>
+<div class="pipeline-cards-grid">
+    {% for pipeline in pipelines %}
+    {% include "partials/pipeline_card.html" %}
+    {% endfor %}
+</div>
+{% else %}
+<p class="empty-state">No pipelines yet. Create one from a repo to get started.</p>
+{% endif %}
+
+<h2>Repos</h2>
 <p><a href="/repos/new">Add Repo</a></p>
 
 {% if repos %}
