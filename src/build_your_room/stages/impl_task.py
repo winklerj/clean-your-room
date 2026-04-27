@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -308,6 +309,14 @@ async def _execute_task_with_rotation(
                     retries=postcondition_retries,
                     results=results,
                     checkpoint_rev=checkpoint_rev,
+                )
+                _maybe_write_diary_file(
+                    clone_path=clone_path,
+                    task_id=task_id,
+                    task_name=task_name,
+                    content=diary,
+                    log_buffer=log_buffer,
+                    pipeline_id=pipeline_id,
                 )
                 newly_ready = await planner.complete_task(
                     task_id, checkpoint_rev, diary
@@ -641,6 +650,60 @@ def _build_diary_entry(
         f"{rev_line}"
         f"\n### Postcondition verification\n{cond_block}\n"
     )
+
+
+_SLUG_RE = re.compile(r"[^a-z0-9]+")
+_SLUG_MAX_LEN = 64
+
+
+def _slugify(name: str) -> str:
+    """Lowercase ASCII slug for filenames.
+
+    Collapses runs of non-alphanumeric characters into ``-`` and trims
+    leading/trailing ``-``. Truncated to 64 chars; falls back to ``"task"``
+    when the input contains no slug-eligible characters.
+    """
+    slug = _SLUG_RE.sub("-", name.lower()).strip("-")
+    if not slug:
+        return "task"
+    return slug[:_SLUG_MAX_LEN].rstrip("-") or "task"
+
+
+def _maybe_write_diary_file(
+    *,
+    clone_path: str,
+    task_id: int,
+    task_name: str,
+    content: str,
+    log_buffer: LogBuffer,
+    pipeline_id: int,
+) -> str | None:
+    """Write the diary content to ``{clone_path}/diary/task-{id}-{slug}.md``.
+
+    Spec line 811 requires diary entries to be stored in both
+    ``htn_tasks.diary_entry`` and in ``diary/`` files. Best-effort: returns
+    ``None`` when the clone path is missing or unwritable, logs OSError but
+    never propagates so the postcondition success path stays dominant.
+    Idempotent: overwrites existing files (replay/retry safe).
+    """
+    if not clone_path:
+        return None
+    clone_dir = Path(clone_path)
+    if not clone_dir.exists():
+        return None
+    diary_dir = clone_dir / "diary"
+    file_path = diary_dir / f"task-{task_id}-{_slugify(task_name)}.md"
+    try:
+        diary_dir.mkdir(parents=True, exist_ok=True)
+        file_path.write_text(content, encoding="utf-8")
+    except OSError as exc:
+        _log(
+            log_buffer,
+            pipeline_id,
+            f"Diary file write failed for task {task_id}: {exc}",
+        )
+        return None
+    return str(file_path)
 
 
 # ---------------------------------------------------------------------------

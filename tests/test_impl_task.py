@@ -33,6 +33,8 @@ from build_your_room.stages.impl_task import (
     _build_resume_prompt,
     _build_task_prompt,
     _checkpoint_enabled,
+    _maybe_write_diary_file,
+    _slugify,
     run_impl_task_stage,
 )
 from build_your_room.streaming import LogBuffer
@@ -1492,3 +1494,240 @@ class TestCheckpointCommitWiring:
 
         # The seeded clone_path '/tmp/test-clone-impl' does not exist on disk
         cmgr.create_checkpoint_commit.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Diary filesystem writes (Task 58)
+# ---------------------------------------------------------------------------
+
+
+class TestSlugify:
+    """Tests for _slugify — invariant: ASCII, length-bounded, deterministic.
+
+    Why: diary filenames are derived from human-authored task names that may
+    contain unicode, punctuation, slashes, or be empty. Filenames must be
+    portable across filesystems and bounded in length.
+    """
+
+    def test_basic_alpha(self) -> None:
+        assert _slugify("Implement Login") == "implement-login"
+
+    def test_collapses_multiple_separators(self) -> None:
+        assert _slugify("hello___world!!!") == "hello-world"
+
+    def test_strips_leading_trailing_separators(self) -> None:
+        assert _slugify("---foo---bar---") == "foo-bar"
+
+    def test_empty_falls_back_to_task(self) -> None:
+        assert _slugify("") == "task"
+
+    def test_only_punctuation_falls_back_to_task(self) -> None:
+        assert _slugify("!!!///---") == "task"
+
+    def test_unicode_dropped(self) -> None:
+        # Non-ASCII alphanumerics are reduced to '-' separators
+        assert _slugify("日本語 task") == "task"
+
+    def test_length_capped(self) -> None:
+        long_name = "x" * 200
+        result = _slugify(long_name)
+        assert len(result) <= 64
+        assert set(result) == {"x"}
+
+    def test_length_cap_strips_trailing_dash(self) -> None:
+        # A truncation point landing on '-' must not leave a trailing dash
+        name = ("a" * 63) + "-foo"
+        result = _slugify(name)
+        assert not result.endswith("-")
+        assert len(result) <= 64
+
+
+class TestMaybeWriteDiaryFile:
+    """Tests for _maybe_write_diary_file — invariant: best-effort, idempotent.
+
+    Why: spec line 811 requires diary entries in both the DB and ``diary/``
+    files. Filesystem failures must not abort task completion (the dominant
+    signal is postcondition success), and replays must not fail.
+    """
+
+    def test_writes_file_under_diary_dir(
+        self, tmp_path: Path, log_buffer: LogBuffer
+    ) -> None:
+        result = _maybe_write_diary_file(
+            clone_path=str(tmp_path),
+            task_id=42,
+            task_name="Implement login",
+            content="# diary content",
+            log_buffer=log_buffer,
+            pipeline_id=1,
+        )
+        assert result is not None
+        written = Path(result)
+        assert written == tmp_path / "diary" / "task-42-implement-login.md"
+        assert written.read_text(encoding="utf-8") == "# diary content"
+
+    def test_creates_diary_dir_if_missing(
+        self, tmp_path: Path, log_buffer: LogBuffer
+    ) -> None:
+        # diary/ does not exist before the call
+        assert not (tmp_path / "diary").exists()
+        _maybe_write_diary_file(
+            clone_path=str(tmp_path),
+            task_id=1,
+            task_name="t",
+            content="x",
+            log_buffer=log_buffer,
+            pipeline_id=1,
+        )
+        assert (tmp_path / "diary").is_dir()
+
+    def test_returns_none_for_empty_clone_path(
+        self, log_buffer: LogBuffer
+    ) -> None:
+        result = _maybe_write_diary_file(
+            clone_path="",
+            task_id=1,
+            task_name="t",
+            content="x",
+            log_buffer=log_buffer,
+            pipeline_id=1,
+        )
+        assert result is None
+
+    def test_returns_none_when_clone_path_missing(
+        self, tmp_path: Path, log_buffer: LogBuffer
+    ) -> None:
+        # Path does not exist
+        missing = tmp_path / "does-not-exist"
+        result = _maybe_write_diary_file(
+            clone_path=str(missing),
+            task_id=1,
+            task_name="t",
+            content="x",
+            log_buffer=log_buffer,
+            pipeline_id=1,
+        )
+        assert result is None
+
+    def test_oserror_logs_and_returns_none(
+        self, tmp_path: Path, log_buffer: LogBuffer
+    ) -> None:
+        # Pre-create diary as a regular file so mkdir + write_text both fail.
+        # Why: simulates a hostile FS state without monkeypatching internals.
+        (tmp_path / "diary").write_text("blocker", encoding="utf-8")
+        result = _maybe_write_diary_file(
+            clone_path=str(tmp_path),
+            task_id=1,
+            task_name="t",
+            content="x",
+            log_buffer=log_buffer,
+            pipeline_id=1,
+        )
+        assert result is None
+
+    def test_idempotent_overwrite(
+        self, tmp_path: Path, log_buffer: LogBuffer
+    ) -> None:
+        # First write
+        _maybe_write_diary_file(
+            clone_path=str(tmp_path),
+            task_id=7,
+            task_name="task",
+            content="first",
+            log_buffer=log_buffer,
+            pipeline_id=1,
+        )
+        # Second write to same task overwrites
+        _maybe_write_diary_file(
+            clone_path=str(tmp_path),
+            task_id=7,
+            task_name="task",
+            content="second",
+            log_buffer=log_buffer,
+            pipeline_id=1,
+        )
+        written = tmp_path / "diary" / "task-7-task.md"
+        assert written.read_text(encoding="utf-8") == "second"
+
+
+class TestDiaryFileIntegration:
+    """Integration: impl_task writes diary files alongside DB entries."""
+
+    @pytest.mark.asyncio
+    async def test_diary_file_written_on_task_success(
+        self,
+        pool_with_stage: Any,
+        log_buffer: LogBuffer,
+        cancel_event: asyncio.Event,
+        tmp_pipelines_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """A successful task completion produces a markdown file in diary/.
+
+        Spec line 811: diary entries stored in both htn_tasks.diary_entry
+        and in diary/ files. The file content mirrors the DB entry.
+        """
+        pool, pipeline_id, stage_id = pool_with_stage
+        clone_dir = await _seed_clone_dir_for_pipeline(pool, pipeline_id, tmp_path)
+        adapter = _make_mock_adapter()
+        planner = _make_mock_planner()
+        cmgr = _make_mock_clone_manager(return_rev="rev-diary-1")
+
+        await run_impl_task_stage(
+            pool=pool,
+            pipeline_id=pipeline_id,
+            stage_id=stage_id,
+            node=_make_node(),
+            adapters={"claude": adapter},
+            log_buffer=log_buffer,
+            cancel_event=cancel_event,
+            pipelines_dir=tmp_pipelines_dir,
+            htn_planner=planner,
+            clone_manager=cmgr,
+        )
+
+        # The default _make_htn_task uses name="Implement login" (id=1)
+        diary_file = clone_dir / "diary" / "task-1-implement-login.md"
+        assert diary_file.exists()
+        text = diary_file.read_text(encoding="utf-8")
+        # File mirrors DB content (same builder), includes name + rev
+        assert "Implement login" in text
+        assert "rev-diary-1" in text
+        # Same content was passed to complete_task (task_id, rev, diary)
+        db_diary = planner.complete_task.call_args.args[2]
+        assert text == db_diary
+
+    @pytest.mark.asyncio
+    async def test_diary_file_not_written_when_clone_path_missing(
+        self,
+        pool_with_stage: Any,
+        log_buffer: LogBuffer,
+        cancel_event: asyncio.Event,
+        tmp_pipelines_dir: Path,
+    ) -> None:
+        """Missing on-disk clone short-circuits without raising.
+
+        Why: tests/recovery scenarios run with synthetic clone_path values.
+        Diary writes follow the same safety valve as checkpoint commits.
+        """
+        pool, pipeline_id, stage_id = pool_with_stage
+        adapter = _make_mock_adapter()
+        planner = _make_mock_planner()
+        cmgr = _make_mock_clone_manager()
+
+        # Stage runs successfully even though the seeded clone_path
+        # /tmp/test-clone-impl is not a real directory
+        await run_impl_task_stage(
+            pool=pool,
+            pipeline_id=pipeline_id,
+            stage_id=stage_id,
+            node=_make_node(),
+            adapters={"claude": adapter},
+            log_buffer=log_buffer,
+            cancel_event=cancel_event,
+            pipelines_dir=tmp_pipelines_dir,
+            htn_planner=planner,
+            clone_manager=cmgr,
+        )
+
+        planner.complete_task.assert_called_once()  # task still completed
