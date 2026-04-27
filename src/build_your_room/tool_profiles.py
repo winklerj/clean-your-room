@@ -14,6 +14,13 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 
+from build_your_room.harness_mcp import (
+    HARNESS_TOOL_NAMES as _HARNESS_BARE_NAMES,
+)
+from build_your_room.harness_mcp import (
+    qualified_tool_name,
+)
+
 
 class StageType(str, Enum):
     """Known pipeline stage types from the spec."""
@@ -34,22 +41,19 @@ _FILE_TOOLS: tuple[str, ...] = ("Read", "Write", "Edit", "Glob", "Grep")
 
 # Harness-provided MCP tools for implementation and validation stages.
 # These are typed tools that enforce workspace roots and command templates.
-_HARNESS_MCP_TOOLS: tuple[str, ...] = (
-    "run_tests",
-    "run_lint",
-    "run_typecheck",
-    "start_dev_server",
-    "browser_validate",
-    "record_browser_artifact",
-)
+# Stored as bare semantic names (``run_tests``, ``run_lint``, …); the
+# concrete SDK names are qualified to ``mcp__harness__<n>`` when the
+# Claude adapter mounts the harness MCP server. See ``harness_mcp.py``.
+_HARNESS_MCP_TOOLS: tuple[str, ...] = _HARNESS_BARE_NAMES
 
 
 @dataclass(frozen=True)
 class ToolProfile:
     """Tool configuration for a pipeline stage.
 
-    allowed_tools: tool names the Claude session may use
-    harness_mcp_tools: additional MCP tools provided by the harness
+    allowed_tools: built-in tool names the Claude session may use
+    harness_mcp_tools: bare names of harness MCP tools (semantic identity);
+        the SDK-qualified names appear in :pyattr:`all_tools`.
     """
 
     allowed_tools: tuple[str, ...]
@@ -57,8 +61,16 @@ class ToolProfile:
 
     @property
     def all_tools(self) -> tuple[str, ...]:
-        """Combined list of all available tools."""
-        return self.allowed_tools + self.harness_mcp_tools
+        """SDK-ready tool list: built-ins plus harness tools qualified for MCP.
+
+        The Claude SDK's ``allowed_tools`` filter compares against the names
+        Claude sees, which for harness tools are
+        ``mcp__harness__<bare-name>``. This property returns that combined,
+        SDK-ready list. Use :pyattr:`harness_mcp_tools` for the bare semantic
+        names.
+        """
+        qualified = tuple(qualified_tool_name(n) for n in self.harness_mcp_tools)
+        return self.allowed_tools + qualified
 
 
 # Stage type → tool profile mapping.

@@ -241,6 +241,7 @@ class ClaudeAgentAdapter:
             can_use_tool=_make_sdk_permission_callback(config.allowed_roots),
             output_format=config.output_format,
             resume=config.resume_session_id,
+            mcp_servers=config.mcp_servers,
         )
 
         client = ClaudeSDKClient(options=options)

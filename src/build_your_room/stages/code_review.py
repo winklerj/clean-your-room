@@ -20,7 +20,12 @@ from typing import Any
 from psycopg_pool import AsyncConnectionPool
 
 from build_your_room.adapters.base import AgentAdapter, SessionConfig
+from build_your_room.command_registry import (
+    CommandRegistry,
+    get_default_command_registry,
+)
 from build_your_room.config import PIPELINES_DIR
+from build_your_room.harness_mcp import session_mcp_servers_for
 from build_your_room.sandbox import WorkspaceSandbox
 from build_your_room.stage_graph import StageNode
 from build_your_room.stages.review_loop import (
@@ -52,6 +57,7 @@ async def run_code_review_stage(
     log_buffer: LogBuffer,
     cancel_event: asyncio.Event,
     pipelines_dir: Path | None = None,
+    command_registry: CommandRegistry | None = None,
 ) -> str:
     """Run the code-review stage: review the full diff and fix issues.
 
@@ -66,6 +72,7 @@ async def run_code_review_stage(
     head_rev = pipeline["head_rev"] or review_base_rev
 
     sandbox = WorkspaceSandbox.for_pipeline(clone_path, base_dir, pipeline_id)
+    cmd_reg = command_registry or get_default_command_registry()
 
     # -- Resolve prompts -------------------------------------------------------
     review_prompt_body = await _resolve_prompt(pool, node.prompt)
@@ -110,6 +117,12 @@ async def run_code_review_stage(
         allowed_roots=sandbox.writable_roots_list,
         pipeline_id=pipeline_id,
         stage_id=stage_id,
+        mcp_servers=session_mcp_servers_for(
+            node.agent,
+            clone_path=clone_path,
+            allowed_roots=sandbox.writable_roots_list,
+            command_registry=cmd_reg,
+        ),
     )
 
     fix_session_config = SessionConfig(
@@ -120,6 +133,12 @@ async def run_code_review_stage(
         allowed_roots=sandbox.writable_roots_list,
         pipeline_id=pipeline_id,
         stage_id=stage_id,
+        mcp_servers=session_mcp_servers_for(
+            fix_agent_type,
+            clone_path=clone_path,
+            allowed_roots=sandbox.writable_roots_list,
+            command_registry=cmd_reg,
+        ),
     )
 
     # -- Review/fix loop -------------------------------------------------------

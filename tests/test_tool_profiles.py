@@ -111,15 +111,19 @@ class TestToolProfile:
     """Tests for ToolProfile dataclass behavior."""
 
     def test_all_tools_combines_both_tuples(self) -> None:
-        """all_tools returns the union of allowed_tools and harness_mcp_tools.
+        """all_tools combines built-ins with SDK-qualified harness MCP names.
 
-        Invariant: all_tools == allowed_tools + harness_mcp_tools.
+        Invariant: all_tools == allowed_tools + tuple(qualified_tool_name(n)
+        for n in harness_mcp_tools). The harness_mcp_tools field stores bare
+        semantic names; ``all_tools`` is what the SDK ``allowed_tools`` filter
+        actually compares against, so harness names appear as
+        ``mcp__harness__<n>``.
         """
         profile = ToolProfile(
             allowed_tools=("Read", "Write"),
             harness_mcp_tools=("run_tests",),
         )
-        assert profile.all_tools == ("Read", "Write", "run_tests")
+        assert profile.all_tools == ("Read", "Write", "mcp__harness__run_tests")
 
     def test_all_tools_empty_harness(self) -> None:
         """all_tools with no harness tools returns just allowed_tools.

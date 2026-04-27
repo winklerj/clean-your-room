@@ -31,6 +31,7 @@ class SessionConfig:
     pipeline_id: int | None = None
     stage_id: int | None = None
     session_db_id: int | None = None
+    mcp_servers: dict[str, Any] = field(default_factory=dict)
     extra: dict[str, Any] = field(default_factory=dict)
 
     @property

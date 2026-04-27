@@ -477,6 +477,39 @@ class TestClaudeAgentAdapter:
         assert call_kwargs.kwargs["can_use_tool"] is not None
         assert callable(call_kwargs.kwargs["can_use_tool"])
 
+    @pytest.mark.asyncio
+    @patch("build_your_room.adapters.claude_adapter.ClaudeSDKClient")
+    @patch("build_your_room.adapters.claude_adapter.ClaudeAgentOptions")
+    async def test_start_session_forwards_mcp_servers(
+        self, mock_options_cls: MagicMock, mock_client_cls: MagicMock
+    ) -> None:
+        """SessionConfig.mcp_servers must be forwarded to ClaudeAgentOptions."""
+        mock_client_cls.return_value = _make_mock_client()
+
+        servers = {"harness": {"type": "sdk", "name": "harness", "instance": object()}}
+        adapter = ClaudeAgentAdapter()
+        config = _make_config(mcp_servers=servers)
+
+        await adapter.start_session(config)
+
+        call_kwargs = mock_options_cls.call_args
+        assert call_kwargs.kwargs["mcp_servers"] is servers
+
+    @pytest.mark.asyncio
+    @patch("build_your_room.adapters.claude_adapter.ClaudeSDKClient")
+    @patch("build_your_room.adapters.claude_adapter.ClaudeAgentOptions")
+    async def test_start_session_default_mcp_servers_is_empty_dict(
+        self, mock_options_cls: MagicMock, mock_client_cls: MagicMock
+    ) -> None:
+        """When SessionConfig.mcp_servers isn't set, an empty dict reaches the SDK."""
+        mock_client_cls.return_value = _make_mock_client()
+
+        adapter = ClaudeAgentAdapter()
+        await adapter.start_session(_make_config())
+
+        call_kwargs = mock_options_cls.call_args
+        assert call_kwargs.kwargs["mcp_servers"] == {}
+
 
 # ---------------------------------------------------------------------------
 # Integration: context monitor + adapter context usage normalisation
@@ -526,15 +559,20 @@ class TestToolProfileIntegration:
         assert "run_tests" not in config.allowed_tools
 
     def test_impl_task_profile_includes_harness_tools(self) -> None:
-        """Impl-task stages should get file tools + harness MCP tools."""
+        """Impl-task stages should get file tools + qualified harness MCP tools."""
+        from build_your_room.harness_mcp import qualified_tool_name
         from build_your_room.tool_profiles import get_tool_profile
 
         profile = get_tool_profile("impl_task")
         config = _make_config(allowed_tools=list(profile.all_tools))
 
         assert "Read" in config.allowed_tools
-        assert "run_tests" in config.allowed_tools
-        assert "run_lint" in config.allowed_tools
+        assert qualified_tool_name("run_tests") in config.allowed_tools
+        assert qualified_tool_name("run_lint") in config.allowed_tools
+        # Bare names must NOT leak through — the SDK's allowed_tools
+        # filter compares against the qualified MCP names.
+        assert "run_tests" not in config.allowed_tools
+        assert "run_lint" not in config.allowed_tools
 
     def test_denied_tools_never_in_any_profile(self) -> None:
         """No stage profile should include denied tools."""

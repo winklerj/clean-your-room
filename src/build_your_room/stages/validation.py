@@ -32,6 +32,7 @@ from build_your_room.command_registry import (
     run_cmd,
 )
 from build_your_room.config import DEVBROWSER_SKILL_PATH, PIPELINES_DIR, PipelineConfig
+from build_your_room.harness_mcp import session_mcp_servers_for
 from build_your_room.sandbox import WorkspaceSandbox
 from build_your_room.stage_graph import StageNode
 from build_your_room.streaming import LogBuffer
@@ -246,16 +247,7 @@ async def run_validation_stage(
     # -- Resolve prompt -------------------------------------------------------
     prompt_body = await _resolve_prompt(pool, node.prompt)
     tool_profile = get_tool_profile(node.stage_type)
-
-    session_config = SessionConfig(
-        model=node.model,
-        clone_path=clone_path,
-        system_prompt=prompt_body,
-        allowed_tools=list(tool_profile.all_tools),
-        allowed_roots=sandbox.writable_roots_list,
-        pipeline_id=pipeline_id,
-        stage_id=stage_id,
-    )
+    cmd_reg = command_registry or get_default_command_registry()
 
     # -- Get adapter ----------------------------------------------------------
     adapter = adapters.get(node.agent)
@@ -275,6 +267,23 @@ async def run_validation_stage(
             pipeline_id=pipeline_id,
             devbrowser_skill_path=DEVBROWSER_SKILL_PATH,
         )
+
+    session_config = SessionConfig(
+        model=node.model,
+        clone_path=clone_path,
+        system_prompt=prompt_body,
+        allowed_tools=list(tool_profile.all_tools),
+        allowed_roots=sandbox.writable_roots_list,
+        pipeline_id=pipeline_id,
+        stage_id=stage_id,
+        mcp_servers=session_mcp_servers_for(
+            node.agent,
+            clone_path=clone_path,
+            allowed_roots=sandbox.writable_roots_list,
+            command_registry=cmd_reg,
+            browser_runner=runner,
+        ),
+    )
 
     # -- Cancellation gate 1 --------------------------------------------------
     if cancel_event.is_set():

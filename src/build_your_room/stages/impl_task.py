@@ -23,12 +23,17 @@ from typing import Any
 from psycopg_pool import AsyncConnectionPool
 
 from build_your_room.adapters.base import AgentAdapter, LiveSession, SessionConfig
+from build_your_room.command_registry import (
+    CommandRegistry,
+    get_default_command_registry,
+)
 from build_your_room.config import PIPELINES_DIR
 from build_your_room.context_monitor import (
     ContextAction,
     ContextMonitor,
     StageContext,
 )
+from build_your_room.harness_mcp import session_mcp_servers_for
 from build_your_room.htn_planner import HTNPlanner
 from build_your_room.sandbox import WorkspaceSandbox
 from build_your_room.stage_graph import StageNode
@@ -58,6 +63,7 @@ async def run_impl_task_stage(
     cancel_event: asyncio.Event,
     pipelines_dir: Path | None = None,
     htn_planner: HTNPlanner | None = None,
+    command_registry: CommandRegistry | None = None,
 ) -> str:
     """Run the impl-task stage: claim, execute, verify, and complete HTN tasks.
 
@@ -73,6 +79,7 @@ async def run_impl_task_stage(
 
     prompt_body = await _resolve_prompt(pool, node.prompt)
     tool_profile = get_tool_profile(node.stage_type)
+    cmd_reg = command_registry or get_default_command_registry()
 
     adapter = adapters.get(node.agent)
     if adapter is None:
@@ -143,6 +150,12 @@ async def run_impl_task_stage(
             context_threshold_pct=float(node.context_threshold_pct),
             pipeline_id=pipeline_id,
             stage_id=stage_id,
+            mcp_servers=session_mcp_servers_for(
+                node.agent,
+                clone_path=clone_path,
+                allowed_roots=sandbox.writable_roots_list,
+                command_registry=cmd_reg,
+            ),
         )
 
         context_monitor = ContextMonitor(
@@ -425,6 +438,7 @@ async def _check_context_and_rotate(
         context_threshold_pct=session_config.context_threshold_pct,
         pipeline_id=pipeline_id,
         stage_id=stage_id,
+        mcp_servers=session_config.mcp_servers,
     )
 
     new_session = await adapter.start_session(resume_config)
