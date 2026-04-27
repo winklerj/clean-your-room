@@ -9,6 +9,7 @@ snapshot always produces metadata files and updates DB state.
 from __future__ import annotations
 
 import json
+import subprocess
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -17,9 +18,37 @@ import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
+from build_your_room.clone_manager import CloneManager
 from build_your_room.db import get_pool
 from build_your_room.recovery import RecoveryManager
 from build_your_room.streaming import LogBuffer
+
+
+def _init_git_repo(repo: Path) -> str:
+    """Initialise an empty git repo with one commit. Returns HEAD revision."""
+    repo.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        ["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "test@test.com"],
+        cwd=repo, check=True, capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test"],
+        cwd=repo, check=True, capture_output=True,
+    )
+    (repo / "README.md").write_text("# baseline\n")
+    subprocess.run(["git", "add", "."], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "initial"],
+        cwd=repo, check=True, capture_output=True,
+    )
+    rev = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=repo, check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    return rev
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -668,6 +697,352 @@ class TestOrchestratorDelegation:
                 )
             ).fetchone()
         assert row["status"] == "cancelled"
+
+
+# ---------------------------------------------------------------------------
+# Snapshot-with-real-clone tests (patch + manifest + reset)
+# ---------------------------------------------------------------------------
+
+
+class TestSnapshotWithRealClone:
+    """Tests for ``snapshot_dirty_workspace`` when a real git clone exists."""
+
+    async def test_captures_patch_diff(self, initialized_db, tmp_path):
+        """Modified tracked file produces a patch.diff containing the change."""
+        pool = get_pool()
+        clone = tmp_path / "clone"
+        baseline_rev = _init_git_repo(clone)
+        (clone / "README.md").write_text("# changed\n")
+
+        pid = await _seed_pipeline(pool, clone_path=str(clone))
+
+        mgr = RecoveryManager(
+            pool,
+            LogBuffer(),
+            pipelines_dir=tmp_path / "pipelines",
+            clone_manager=CloneManager(pool),
+        )
+        snapshot_path = await mgr.snapshot_dirty_workspace(
+            pid, baseline_rev, str(clone)
+        )
+
+        assert snapshot_path is not None
+        patch_file = Path(snapshot_path) / "patch.diff"
+        assert patch_file.exists()
+        diff_text = patch_file.read_text()
+        assert "README.md" in diff_text
+        assert "+# changed" in diff_text
+
+    async def test_captures_manifest(self, initialized_db, tmp_path):
+        """Modified, added, and untracked files all appear in changed_files.json."""
+        pool = get_pool()
+        clone = tmp_path / "clone"
+        baseline_rev = _init_git_repo(clone)
+        (clone / "README.md").write_text("# changed\n")
+        (clone / "new.txt").write_text("brand new\n")
+
+        pid = await _seed_pipeline(pool, clone_path=str(clone))
+
+        mgr = RecoveryManager(
+            pool,
+            LogBuffer(),
+            pipelines_dir=tmp_path / "pipelines",
+            clone_manager=CloneManager(pool),
+        )
+        snapshot_path = await mgr.snapshot_dirty_workspace(
+            pid, baseline_rev, str(clone)
+        )
+
+        assert snapshot_path is not None
+        manifest = json.loads((Path(snapshot_path) / "changed_files.json").read_text())
+        paths = {entry["path"] for entry in manifest}
+        assert "README.md" in paths
+        assert "new.txt" in paths
+
+    async def test_resets_clone_to_baseline(self, initialized_db, tmp_path):
+        """After snapshot, working tree matches baseline_rev with clean status."""
+        pool = get_pool()
+        clone = tmp_path / "clone"
+        baseline_rev = _init_git_repo(clone)
+        (clone / "README.md").write_text("# changed\n")
+        (clone / "extra.txt").write_text("untracked\n")
+
+        pid = await _seed_pipeline(pool, clone_path=str(clone))
+
+        mgr = RecoveryManager(
+            pool,
+            LogBuffer(),
+            pipelines_dir=tmp_path / "pipelines",
+            clone_manager=CloneManager(pool),
+        )
+        await mgr.snapshot_dirty_workspace(pid, baseline_rev, str(clone))
+
+        # Working tree should match baseline content
+        assert (clone / "README.md").read_text() == "# baseline\n"
+        # Untracked file should be removed by `git clean -fd`
+        assert not (clone / "extra.txt").exists()
+        # Status should be empty
+        status = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=clone, check=True, capture_output=True, text=True,
+        ).stdout
+        assert status == ""
+
+    async def test_metadata_records_capture_flags(self, initialized_db, tmp_path):
+        """recovery_metadata.json records patch_captured, manifest_captured, clone_reset."""
+        pool = get_pool()
+        clone = tmp_path / "clone"
+        baseline_rev = _init_git_repo(clone)
+        (clone / "README.md").write_text("# changed\n")
+
+        pid = await _seed_pipeline(pool, clone_path=str(clone))
+
+        mgr = RecoveryManager(
+            pool,
+            LogBuffer(),
+            pipelines_dir=tmp_path / "pipelines",
+            clone_manager=CloneManager(pool),
+        )
+        snapshot_path = await mgr.snapshot_dirty_workspace(
+            pid, baseline_rev, str(clone)
+        )
+
+        assert snapshot_path is not None
+        metadata = json.loads(
+            (Path(snapshot_path) / "recovery_metadata.json").read_text()
+        )
+        assert metadata["patch_captured"] is True
+        assert metadata["manifest_captured"] is True
+        assert metadata["clone_reset"] is True
+
+    async def test_no_clone_dir_falls_back_to_metadata(self, initialized_db, tmp_path):
+        """Missing clone path: still writes metadata, no patch/manifest, flags False."""
+        pool = get_pool()
+        pid = await _seed_pipeline(pool, clone_path=str(tmp_path / "missing"))
+
+        mgr = RecoveryManager(
+            pool,
+            LogBuffer(),
+            pipelines_dir=tmp_path / "pipelines",
+            clone_manager=CloneManager(pool),
+        )
+        snapshot_path = await mgr.snapshot_dirty_workspace(
+            pid, "abc123", str(tmp_path / "missing")
+        )
+
+        assert snapshot_path is not None
+        snapshot_dir = Path(snapshot_path)
+        assert (snapshot_dir / "recovery_metadata.json").exists()
+        assert not (snapshot_dir / "patch.diff").exists()
+        assert not (snapshot_dir / "changed_files.json").exists()
+
+        metadata = json.loads((snapshot_dir / "recovery_metadata.json").read_text())
+        assert metadata["patch_captured"] is False
+        assert metadata["manifest_captured"] is False
+        assert metadata["clone_reset"] is False
+
+    async def test_non_git_clone_falls_back_gracefully(
+        self, initialized_db, tmp_path
+    ):
+        """Clone dir exists but is not a git repo: snapshot still produces metadata."""
+        pool = get_pool()
+        clone = tmp_path / "not-git"
+        clone.mkdir()
+        (clone / "file.txt").write_text("content\n")
+
+        pid = await _seed_pipeline(pool, clone_path=str(clone))
+
+        mgr = RecoveryManager(
+            pool,
+            LogBuffer(),
+            pipelines_dir=tmp_path / "pipelines",
+            clone_manager=CloneManager(pool),
+        )
+        snapshot_path = await mgr.snapshot_dirty_workspace(
+            pid, "abc123", str(clone)
+        )
+
+        assert snapshot_path is not None
+        metadata = json.loads(
+            (Path(snapshot_path) / "recovery_metadata.json").read_text()
+        )
+        assert metadata["patch_captured"] is False
+        assert metadata["clone_reset"] is False
+
+    async def test_clean_clone_produces_empty_patch(self, initialized_db, tmp_path):
+        """Calling snapshot on a clean repo writes an empty patch.diff and resets to no-op."""
+        pool = get_pool()
+        clone = tmp_path / "clone"
+        baseline_rev = _init_git_repo(clone)
+
+        pid = await _seed_pipeline(pool, clone_path=str(clone))
+
+        mgr = RecoveryManager(
+            pool,
+            LogBuffer(),
+            pipelines_dir=tmp_path / "pipelines",
+            clone_manager=CloneManager(pool),
+        )
+        snapshot_path = await mgr.snapshot_dirty_workspace(
+            pid, baseline_rev, str(clone)
+        )
+
+        assert snapshot_path is not None
+        diff_text = (Path(snapshot_path) / "patch.diff").read_text()
+        assert diff_text == ""
+        manifest = json.loads(
+            (Path(snapshot_path) / "changed_files.json").read_text()
+        )
+        assert manifest == []
+
+
+# ---------------------------------------------------------------------------
+# Git-status authoritative dirty detection tests
+# ---------------------------------------------------------------------------
+
+
+class TestGitDirtyDetection:
+    """Verify recovery uses git status as authoritative when CloneManager is injected."""
+
+    async def test_reconcile_snapshots_when_workspace_state_clean_but_git_dirty(
+        self, initialized_db, tmp_path
+    ):
+        """workspace_state='clean' but git status dirty → snapshot still fires."""
+        pool = get_pool()
+        clone = tmp_path / "clone"
+        baseline_rev = _init_git_repo(clone)
+        (clone / "README.md").write_text("# changed\n")
+
+        pid = await _seed_pipeline(
+            pool, status="running", clone_path=str(clone), workspace_state="clean"
+        )
+        # Update review_base_rev so reset has a real target
+        async with pool.connection() as conn:
+            await conn.execute(
+                "UPDATE pipelines SET review_base_rev = %s WHERE id = %s",
+                (baseline_rev, pid),
+            )
+            await conn.commit()
+        await _set_expired_lease(pool, pid)
+
+        mgr = RecoveryManager(
+            pool,
+            LogBuffer(),
+            pipelines_dir=tmp_path / "pipelines",
+            clone_manager=CloneManager(pool),
+        )
+        await mgr.reconcile_running_state()
+
+        async with pool.connection() as conn:
+            row = await (
+                await conn.execute(
+                    "SELECT dirty_snapshot_artifact FROM pipelines WHERE id = %s",
+                    (pid,),
+                )
+            ).fetchone()
+        assert row["dirty_snapshot_artifact"] is not None
+        assert (Path(row["dirty_snapshot_artifact"]) / "patch.diff").exists()
+        # Clone should be reset
+        assert (clone / "README.md").read_text() == "# baseline\n"
+
+    async def test_handle_cancellation_snapshots_when_git_dirty(
+        self, initialized_db, tmp_path
+    ):
+        """Cancellation also detects git-dirty even when workspace_state='clean'."""
+        pool = get_pool()
+        clone = tmp_path / "clone"
+        baseline_rev = _init_git_repo(clone)
+        (clone / "README.md").write_text("# changed\n")
+
+        pid = await _seed_pipeline(
+            pool, status="running", clone_path=str(clone), workspace_state="clean"
+        )
+        async with pool.connection() as conn:
+            await conn.execute(
+                "UPDATE pipelines SET review_base_rev = %s WHERE id = %s",
+                (baseline_rev, pid),
+            )
+            await conn.commit()
+
+        mgr = RecoveryManager(
+            pool,
+            LogBuffer(),
+            pipelines_dir=tmp_path / "pipelines",
+            clone_manager=CloneManager(pool),
+        )
+        await mgr.handle_cancellation(pid, "owner-tok")
+
+        async with pool.connection() as conn:
+            row = await (
+                await conn.execute(
+                    "SELECT dirty_snapshot_artifact, status FROM pipelines WHERE id = %s",
+                    (pid,),
+                )
+            ).fetchone()
+        assert row["status"] == "cancelled"
+        assert row["dirty_snapshot_artifact"] is not None
+        assert (clone / "README.md").read_text() == "# baseline\n"
+
+    async def test_clean_git_clone_with_clean_state_no_snapshot(
+        self, initialized_db, tmp_path
+    ):
+        """Clean workspace_state AND clean git clone → no snapshot."""
+        pool = get_pool()
+        clone = tmp_path / "clone"
+        baseline_rev = _init_git_repo(clone)
+
+        pid = await _seed_pipeline(
+            pool, status="running", clone_path=str(clone), workspace_state="clean"
+        )
+        async with pool.connection() as conn:
+            await conn.execute(
+                "UPDATE pipelines SET review_base_rev = %s WHERE id = %s",
+                (baseline_rev, pid),
+            )
+            await conn.commit()
+
+        mgr = RecoveryManager(
+            pool,
+            LogBuffer(),
+            pipelines_dir=tmp_path / "pipelines",
+            clone_manager=CloneManager(pool),
+        )
+        await mgr.handle_cancellation(pid, "owner-tok")
+
+        async with pool.connection() as conn:
+            row = await (
+                await conn.execute(
+                    "SELECT dirty_snapshot_artifact FROM pipelines WHERE id = %s",
+                    (pid,),
+                )
+            ).fetchone()
+        assert row["dirty_snapshot_artifact"] is None
+
+    async def test_no_clone_manager_falls_back_to_workspace_state(
+        self, initialized_db, tmp_path
+    ):
+        """Without a CloneManager, dirty detection ignores git and uses workspace_state."""
+        pool = get_pool()
+        clone = tmp_path / "clone"
+        _init_git_repo(clone)
+        (clone / "README.md").write_text("# changed\n")
+
+        pid = await _seed_pipeline(
+            pool, status="running", clone_path=str(clone), workspace_state="clean"
+        )
+
+        # No clone_manager injected — git dirty should be ignored.
+        mgr = RecoveryManager(pool, LogBuffer(), pipelines_dir=tmp_path / "pipelines")
+        await mgr.handle_cancellation(pid, "owner-tok")
+
+        async with pool.connection() as conn:
+            row = await (
+                await conn.execute(
+                    "SELECT dirty_snapshot_artifact FROM pipelines WHERE id = %s",
+                    (pid,),
+                )
+            ).fetchone()
+        assert row["dirty_snapshot_artifact"] is None
 
 
 # ---------------------------------------------------------------------------

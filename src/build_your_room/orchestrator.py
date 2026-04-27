@@ -78,7 +78,9 @@ class PipelineOrchestrator:
             lease_ttl_sec=lease_ttl_sec,
             heartbeat_interval_sec=heartbeat_interval_sec,
         )
-        self._recovery_manager = recovery_manager or RecoveryManager(pool, log_buffer)
+        self._recovery_manager = recovery_manager or RecoveryManager(
+            pool, log_buffer, clone_manager=self._clone_manager
+        )
         self._active_pipelines: dict[int, tuple[asyncio.Task, asyncio.Event]] = {}  # type: ignore[type-arg]
 
     # ------------------------------------------------------------------

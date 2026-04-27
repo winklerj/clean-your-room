@@ -21,6 +21,7 @@ from typing import Any
 
 from psycopg_pool import AsyncConnectionPool
 
+from build_your_room.clone_manager import CloneManager, GitError
 from build_your_room.config import PIPELINES_DIR
 from build_your_room.streaming import LogBuffer
 
@@ -38,6 +39,11 @@ class RecoveryManager:
     Works alongside LeaseManager: LeaseManager owns lease acquire/release/renew,
     RecoveryManager owns what happens when a lease is found stale or when a
     pipeline needs to be cancelled/snapshotted.
+
+    When a :class:`CloneManager` is injected, snapshot operations capture a
+    full patch + changed-files manifest from the clone and reset the working
+    tree to the accepted baseline (spec invariant ``WorkspaceMatchesHeadUnlessOwned``).
+    Without a clone manager the snapshot falls back to metadata-only.
     """
 
     def __init__(
@@ -46,10 +52,12 @@ class RecoveryManager:
         log_buffer: LogBuffer,
         *,
         pipelines_dir: Path | None = None,
+        clone_manager: CloneManager | None = None,
     ) -> None:
         self._pool = pool
         self._log_buffer = log_buffer
         self._pipelines_dir = pipelines_dir or PIPELINES_DIR
+        self._clone_manager = clone_manager
 
     @property
     def pipelines_dir(self) -> Path:
@@ -96,7 +104,9 @@ class RecoveryManager:
                 baseline_rev = row["head_rev"] or row["review_base_rev"]
                 clone_path = row["clone_path"]
 
-                if row["workspace_state"] != "clean":
+                if await self._workspace_appears_dirty(
+                    row["workspace_state"], clone_path
+                ):
                     snapshot_path = await self.snapshot_dirty_workspace(
                         pipeline_id, baseline_rev, clone_path, conn=conn
                     )
@@ -166,24 +176,45 @@ class RecoveryManager:
         *,
         conn: Any | None = None,
     ) -> str | None:
-        """Capture uncheckpointed edits into state/recovery/.
+        """Capture uncheckpointed edits into ``state/recovery/{timestamp}/``.
 
-        Returns the snapshot artifact path, or None if the workspace was clean.
+        Always writes ``recovery_metadata.json``. When a :class:`CloneManager`
+        is injected and the clone is a real git repo, additionally captures
+        ``patch.diff`` (full diff incl. untracked files) and
+        ``changed_files.json`` (per-file porcelain status), then resets the
+        working tree to ``baseline_rev`` to satisfy the
+        ``WorkspaceMatchesHeadUnlessOwned`` invariant.
+
+        Returns the snapshot artifact path. Reset failures are logged but do
+        not raise — the snapshot itself is still recorded so an operator can
+        inspect what was lost.
         """
         recovery_dir = self._pipelines_dir / str(pipeline_id) / "state" / "recovery"
         recovery_dir.mkdir(parents=True, exist_ok=True)
 
         timestamp = _utc_now().strftime("%Y%m%dT%H%M%SZ")
         snapshot_path = str(recovery_dir / timestamp)
-        Path(snapshot_path).mkdir(parents=True, exist_ok=True)
+        snapshot_dir = Path(snapshot_path)
+        snapshot_dir.mkdir(parents=True, exist_ok=True)
+
+        patch_captured = await self._capture_patch_artifact(
+            snapshot_dir, clone_path, baseline_rev
+        )
+        manifest_captured = await self._capture_changed_files_manifest(
+            snapshot_dir, clone_path
+        )
+        reset_ok = await self._reset_clone_to_baseline(clone_path, baseline_rev)
 
         metadata = {
             "pipeline_id": pipeline_id,
             "baseline_rev": baseline_rev,
             "clone_path": clone_path,
             "snapshot_at": timestamp,
+            "patch_captured": patch_captured,
+            "manifest_captured": manifest_captured,
+            "clone_reset": reset_ok,
         }
-        metadata_file = Path(snapshot_path) / "recovery_metadata.json"
+        metadata_file = snapshot_dir / "recovery_metadata.json"
         metadata_file.write_text(json.dumps(metadata, indent=2))
 
         if conn is not None:
@@ -202,11 +233,125 @@ class RecoveryManager:
                 await new_conn.commit()
 
         logger.info(
-            "Snapshotted dirty workspace for pipeline %d to %s",
+            "Snapshotted dirty workspace for pipeline %d to %s "
+            "(patch=%s, manifest=%s, reset=%s)",
             pipeline_id,
             snapshot_path,
+            patch_captured,
+            manifest_captured,
+            reset_ok,
         )
         return snapshot_path
+
+    # ------------------------------------------------------------------
+    # Snapshot helpers
+    # ------------------------------------------------------------------
+
+    async def _workspace_appears_dirty(
+        self, workspace_state: str | None, clone_path: str | None
+    ) -> bool:
+        """Return True if either the workspace_state hint or git status says dirty.
+
+        ``workspace_state`` is a hint that may not reflect reality (the
+        orchestrator does not always transition it to ``'dirty_live'``).
+        Git status — when available — is authoritative.
+        """
+        if workspace_state and workspace_state != "clean":
+            return True
+        if not clone_path or self._clone_manager is None:
+            return False
+        if not Path(clone_path).is_dir():
+            return False
+        try:
+            return not await self._clone_manager.is_workspace_clean(clone_path)
+        except GitError:
+            # Not a git repo, or git failed for another reason — fall back
+            # to the workspace_state hint (already evaluated above as clean).
+            return False
+
+    async def _capture_patch_artifact(
+        self, snapshot_dir: Path, clone_path: str | None, baseline_rev: str
+    ) -> bool:
+        """Write ``patch.diff`` to the snapshot directory if possible.
+
+        Returns True if a patch file was written (even if empty), False if
+        the clone could not be read.
+        """
+        if (
+            not clone_path
+            or self._clone_manager is None
+            or not Path(clone_path).is_dir()
+        ):
+            return False
+        try:
+            diff_text = await self._clone_manager.capture_dirty_diff(
+                clone_path, baseline_rev
+            )
+        except GitError as exc:
+            logger.warning(
+                "capture_dirty_diff failed for %s: %s", clone_path, exc.stderr
+            )
+            return False
+        (snapshot_dir / "patch.diff").write_text(diff_text)
+        return True
+
+    async def _capture_changed_files_manifest(
+        self, snapshot_dir: Path, clone_path: str | None
+    ) -> bool:
+        """Write ``changed_files.json`` listing per-file porcelain entries.
+
+        Returns True if the manifest was written, False if git status was
+        unavailable.
+        """
+        if not clone_path or not Path(clone_path).is_dir():
+            return False
+        from build_your_room.clone_manager import _run_git
+
+        try:
+            porcelain = await _run_git(
+                ["status", "--porcelain"], cwd=clone_path
+            )
+        except GitError as exc:
+            logger.warning(
+                "git status --porcelain failed for %s: %s", clone_path, exc.stderr
+            )
+            return False
+
+        entries: list[dict[str, str]] = []
+        for line in porcelain.splitlines():
+            # _run_git strips outer whitespace, collapsing the porcelain " M"
+            # leading-space encoding. Split on whitespace once to recover
+            # status code + path.
+            parts = line.split(None, 1)
+            if len(parts) != 2:
+                continue
+            entries.append({"status": parts[0], "path": parts[1]})
+
+        manifest_file = snapshot_dir / "changed_files.json"
+        manifest_file.write_text(json.dumps(entries, indent=2))
+        return True
+
+    async def _reset_clone_to_baseline(
+        self, clone_path: str | None, baseline_rev: str
+    ) -> bool:
+        """Reset the working tree to ``baseline_rev``. Logs and skips on failure."""
+        if (
+            not clone_path
+            or self._clone_manager is None
+            or not Path(clone_path).is_dir()
+        ):
+            return False
+        try:
+            await self._clone_manager.reset_to_rev(clone_path, baseline_rev)
+        except GitError as exc:
+            logger.warning(
+                "reset_to_rev(%s, %s) failed: %s",
+                clone_path,
+                baseline_rev,
+                exc.stderr,
+            )
+            return False
+        return True
 
     # ------------------------------------------------------------------
     # Cancellation cleanup
@@ -225,7 +370,9 @@ class RecoveryManager:
                 )
             ).fetchone()
 
-            if pipeline_row and pipeline_row["workspace_state"] != "clean":
+            if pipeline_row and await self._workspace_appears_dirty(
+                pipeline_row["workspace_state"], pipeline_row["clone_path"]
+            ):
                 baseline = pipeline_row["head_rev"] or pipeline_row["review_base_rev"]
                 await self.snapshot_dirty_workspace(
                     pipeline_id, baseline, pipeline_row["clone_path"], conn=conn
