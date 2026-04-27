@@ -29,8 +29,10 @@ from build_your_room.stage_graph import StageNode
 from build_your_room.stages.impl_task import (
     STAGE_RESULT_ESCALATED,
     STAGE_RESULT_STAGE_COMPLETE,
-    _build_task_prompt,
+    _build_diary_entry,
     _build_resume_prompt,
+    _build_task_prompt,
+    _checkpoint_enabled,
     run_impl_task_stage,
 )
 from build_your_room.streaming import LogBuffer
@@ -1093,3 +1095,400 @@ class TestImplTaskProperties:
         if r1.action == ContextAction.ROTATE:
             assert r1.rotation_plan is not None
             assert r1.rotation_plan.has_active_claim is True
+
+
+# ---------------------------------------------------------------------------
+# Checkpoint commits + head_rev advancement
+# ---------------------------------------------------------------------------
+
+
+def _make_mock_clone_manager(
+    *, return_rev: str | None = "rev-checkpoint-1"
+) -> AsyncMock:
+    """Build a mock CloneManager whose create_checkpoint_commit is observable."""
+    from build_your_room.clone_manager import CloneManager
+
+    cmgr = AsyncMock(spec=CloneManager)
+    cmgr.create_checkpoint_commit.return_value = return_rev
+    return cmgr
+
+
+async def _seed_clone_dir_for_pipeline(
+    pool: Any, pipeline_id: int, base: Path
+) -> Path:
+    """Materialize a real clone_path on disk so impl_task's existence check passes.
+
+    The fixture pool_with_stage seeds clone_path='/tmp/test-clone-impl' which
+    may not exist; checkpoint wiring short-circuits on missing dirs (a safety
+    valve), so tests that exercise checkpointing must point clone_path at a
+    real directory.
+    """
+    clone_dir = base / f"clone-{pipeline_id}"
+    clone_dir.mkdir(parents=True, exist_ok=True)
+    async with pool.connection() as conn:
+        await conn.execute(
+            "UPDATE pipelines SET clone_path = %s WHERE id = %s",
+            (str(clone_dir), pipeline_id),
+        )
+        await conn.commit()
+    return clone_dir
+
+
+class TestCheckpointEnabledHelper:
+    """Tests for the _checkpoint_enabled config parser.
+
+    Why: PipelineConfig defaults checkpoint_commits=True; the impl_task
+    runner reads it via pipelines.config_json which can be missing,
+    malformed, or partial. Default-True is the production-safe choice.
+    """
+
+    def test_none_defaults_to_true(self) -> None:
+        assert _checkpoint_enabled(None) is True
+
+    def test_unparseable_string_defaults_to_true(self) -> None:
+        assert _checkpoint_enabled("not json") is True
+
+    def test_explicit_true(self) -> None:
+        assert _checkpoint_enabled('{"checkpoint_commits": true}') is True
+
+    def test_explicit_false(self) -> None:
+        assert _checkpoint_enabled('{"checkpoint_commits": false}') is False
+
+    def test_dict_input_false(self) -> None:
+        assert _checkpoint_enabled({"checkpoint_commits": False}) is False
+
+    def test_missing_key_defaults_to_true(self) -> None:
+        assert _checkpoint_enabled('{"other": 1}') is True
+
+
+class TestDiaryEntry:
+    """Tests for _build_diary_entry — invariant: includes name + revision."""
+
+    def test_includes_task_name(self) -> None:
+        task = _make_htn_task(name="Implement login")
+        diary = _build_diary_entry(
+            task_name="Implement login",
+            task=task,
+            retries=0,
+            results=[],
+            checkpoint_rev="abc123",
+        )
+        assert "Implement login" in diary
+        assert "abc123" in diary
+
+    def test_marks_no_changes_when_no_rev(self) -> None:
+        task = _make_htn_task()
+        diary = _build_diary_entry(
+            task_name="x", task=task, retries=0, results=[], checkpoint_rev=None,
+        )
+        assert "no workspace changes" in diary
+
+    def test_includes_postcondition_pass_marker(self) -> None:
+        task = _make_htn_task()
+        result = ConditionResult(
+            passed=True, condition_type="tests_pass",
+            description="all tests green", detail="",
+        )
+        diary = _build_diary_entry(
+            task_name="x", task=task, retries=2, results=[result], checkpoint_rev="r",
+        )
+        assert "PASS" in diary
+        assert "all tests green" in diary
+        assert "retries: 2" in diary
+
+
+class TestCheckpointCommitWiring:
+    """Integration tests: impl_task wires checkpoint commits into completion.
+
+    Spec lines 746/911 require head_rev to advance and a local checkpoint
+    revision to be recorded after postconditions pass. Without this wiring,
+    code_review's review_base_rev → head_rev diff is always empty and the
+    ReviewCoversHead invariant is silently broken.
+    """
+
+    @pytest.mark.asyncio
+    async def test_checkpoint_called_on_success(
+        self,
+        pool_with_stage: Any,
+        log_buffer: LogBuffer,
+        cancel_event: asyncio.Event,
+        tmp_pipelines_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """create_checkpoint_commit is invoked after postconditions pass."""
+        pool, pipeline_id, stage_id = pool_with_stage
+        await _seed_clone_dir_for_pipeline(pool, pipeline_id, tmp_path)
+        adapter = _make_mock_adapter()
+        planner = _make_mock_planner()
+        cmgr = _make_mock_clone_manager(return_rev="newrev-1")
+
+        await run_impl_task_stage(
+            pool=pool,
+            pipeline_id=pipeline_id,
+            stage_id=stage_id,
+            node=_make_node(),
+            adapters={"claude": adapter},
+            log_buffer=log_buffer,
+            cancel_event=cancel_event,
+            pipelines_dir=tmp_pipelines_dir,
+            htn_planner=planner,
+            clone_manager=cmgr,
+        )
+
+        cmgr.create_checkpoint_commit.assert_called_once()
+        # Pipeline head_rev advanced
+        async with pool.connection() as conn:
+            row = await (
+                await conn.execute(
+                    "SELECT head_rev FROM pipelines WHERE id = %s",
+                    (pipeline_id,),
+                )
+            ).fetchone()
+        assert row["head_rev"] == "newrev-1"
+
+    @pytest.mark.asyncio
+    async def test_checkpoint_passed_to_complete_task(
+        self,
+        pool_with_stage: Any,
+        log_buffer: LogBuffer,
+        cancel_event: asyncio.Event,
+        tmp_pipelines_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """The new revision is recorded on htn_tasks.checkpoint_rev via complete_task."""
+        pool, pipeline_id, stage_id = pool_with_stage
+        await _seed_clone_dir_for_pipeline(pool, pipeline_id, tmp_path)
+        adapter = _make_mock_adapter()
+        planner = _make_mock_planner()
+        cmgr = _make_mock_clone_manager(return_rev="newrev-2")
+
+        await run_impl_task_stage(
+            pool=pool,
+            pipeline_id=pipeline_id,
+            stage_id=stage_id,
+            node=_make_node(),
+            adapters={"claude": adapter},
+            log_buffer=log_buffer,
+            cancel_event=cancel_event,
+            pipelines_dir=tmp_pipelines_dir,
+            htn_planner=planner,
+            clone_manager=cmgr,
+        )
+
+        planner.complete_task.assert_called_once()
+        call_args = planner.complete_task.call_args
+        # complete_task(task_id, checkpoint_rev, diary)
+        assert call_args.args[1] == "newrev-2"
+        assert call_args.args[2]  # non-empty diary entry
+
+    @pytest.mark.asyncio
+    async def test_checkpoint_skipped_when_config_disabled(
+        self,
+        pool_with_stage: Any,
+        log_buffer: LogBuffer,
+        cancel_event: asyncio.Event,
+        tmp_pipelines_dir: Path,
+    ) -> None:
+        """When config_json.checkpoint_commits=false, no checkpoint is made.
+
+        Why: operators must be able to opt out (e.g. for read-only repos
+        or pipelines that drive an external system).
+        """
+        pool, pipeline_id, stage_id = pool_with_stage
+        async with pool.connection() as conn:
+            await conn.execute(
+                "UPDATE pipelines SET config_json = %s WHERE id = %s",
+                (json.dumps({"checkpoint_commits": False}), pipeline_id),
+            )
+            await conn.commit()
+
+        adapter = _make_mock_adapter()
+        planner = _make_mock_planner()
+        cmgr = _make_mock_clone_manager()
+
+        await run_impl_task_stage(
+            pool=pool,
+            pipeline_id=pipeline_id,
+            stage_id=stage_id,
+            node=_make_node(),
+            adapters={"claude": adapter},
+            log_buffer=log_buffer,
+            cancel_event=cancel_event,
+            pipelines_dir=tmp_pipelines_dir,
+            htn_planner=planner,
+            clone_manager=cmgr,
+        )
+
+        cmgr.create_checkpoint_commit.assert_not_called()
+        # complete_task still called — just with checkpoint_rev=None
+        planner.complete_task.assert_called_once()
+        assert planner.complete_task.call_args.args[1] is None
+
+    @pytest.mark.asyncio
+    async def test_no_op_when_workspace_clean(
+        self,
+        pool_with_stage: Any,
+        log_buffer: LogBuffer,
+        cancel_event: asyncio.Event,
+        tmp_pipelines_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """Clean workspace (no agent edits) → checkpoint returns None → head_rev unchanged."""
+        pool, pipeline_id, stage_id = pool_with_stage
+        await _seed_clone_dir_for_pipeline(pool, pipeline_id, tmp_path)
+        adapter = _make_mock_adapter()
+        planner = _make_mock_planner()
+        cmgr = _make_mock_clone_manager(return_rev=None)  # clean workspace
+
+        await run_impl_task_stage(
+            pool=pool,
+            pipeline_id=pipeline_id,
+            stage_id=stage_id,
+            node=_make_node(),
+            adapters={"claude": adapter},
+            log_buffer=log_buffer,
+            cancel_event=cancel_event,
+            pipelines_dir=tmp_pipelines_dir,
+            htn_planner=planner,
+            clone_manager=cmgr,
+        )
+
+        cmgr.create_checkpoint_commit.assert_called_once()
+        # head_rev still NULL (or unchanged baseline)
+        async with pool.connection() as conn:
+            row = await (
+                await conn.execute(
+                    "SELECT head_rev FROM pipelines WHERE id = %s",
+                    (pipeline_id,),
+                )
+            ).fetchone()
+        assert row["head_rev"] is None
+        assert planner.complete_task.call_args.args[1] is None
+
+    @pytest.mark.asyncio
+    async def test_git_error_does_not_abort_completion(
+        self,
+        pool_with_stage: Any,
+        log_buffer: LogBuffer,
+        cancel_event: asyncio.Event,
+        tmp_pipelines_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """If checkpoint commit fails (e.g. non-git clone), task still completes.
+
+        Why: postcondition success is the dominant signal. A checkpoint failure
+        should be logged but not block readiness propagation, otherwise a
+        misconfigured clone bricks the whole pipeline.
+        """
+        from build_your_room.clone_manager import GitError
+
+        pool, pipeline_id, stage_id = pool_with_stage
+        await _seed_clone_dir_for_pipeline(pool, pipeline_id, tmp_path)
+        adapter = _make_mock_adapter()
+        planner = _make_mock_planner()
+        cmgr = _make_mock_clone_manager()
+        cmgr.create_checkpoint_commit.side_effect = GitError(
+            ["git", "commit"], 128, "fatal: not a git repo"
+        )
+
+        result = await run_impl_task_stage(
+            pool=pool,
+            pipeline_id=pipeline_id,
+            stage_id=stage_id,
+            node=_make_node(),
+            adapters={"claude": adapter},
+            log_buffer=log_buffer,
+            cancel_event=cancel_event,
+            pipelines_dir=tmp_pipelines_dir,
+            htn_planner=planner,
+            clone_manager=cmgr,
+        )
+
+        assert result == STAGE_RESULT_STAGE_COMPLETE
+        planner.complete_task.assert_called_once()
+        assert planner.complete_task.call_args.args[1] is None
+        history = log_buffer.get_history(pipeline_id)
+        assert any("Checkpoint commit failed" in m for m in history)
+
+    @pytest.mark.asyncio
+    async def test_two_tasks_advance_head_rev_in_sequence(
+        self,
+        pool_with_stage: Any,
+        log_buffer: LogBuffer,
+        cancel_event: asyncio.Event,
+        tmp_pipelines_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """Two completed tasks produce two checkpoint commits; final head_rev = last rev.
+
+        Property: head_rev monotonically advances as tasks complete in order.
+        """
+        pool, pipeline_id, stage_id = pool_with_stage
+        await _seed_clone_dir_for_pipeline(pool, pipeline_id, tmp_path)
+        task1 = _make_htn_task(id=1, name="Task A")
+        task2 = _make_htn_task(id=2, name="Task B")
+        planner = _make_mock_planner(
+            tasks=[task1, task2], progress_summary={"completed": 2},
+        )
+        adapter = _make_mock_adapter()
+        cmgr = _make_mock_clone_manager()
+        cmgr.create_checkpoint_commit.side_effect = ["rev-A", "rev-B"]
+
+        await run_impl_task_stage(
+            pool=pool,
+            pipeline_id=pipeline_id,
+            stage_id=stage_id,
+            node=_make_node(),
+            adapters={"claude": adapter},
+            log_buffer=log_buffer,
+            cancel_event=cancel_event,
+            pipelines_dir=tmp_pipelines_dir,
+            htn_planner=planner,
+            clone_manager=cmgr,
+        )
+
+        assert cmgr.create_checkpoint_commit.call_count == 2
+        # Final head_rev is rev-B (the last commit)
+        async with pool.connection() as conn:
+            row = await (
+                await conn.execute(
+                    "SELECT head_rev FROM pipelines WHERE id = %s",
+                    (pipeline_id,),
+                )
+            ).fetchone()
+        assert row["head_rev"] == "rev-B"
+
+    @pytest.mark.asyncio
+    async def test_skipped_when_clone_path_missing_on_disk(
+        self,
+        pool_with_stage: Any,
+        log_buffer: LogBuffer,
+        cancel_event: asyncio.Event,
+        tmp_pipelines_dir: Path,
+    ) -> None:
+        """Missing on-disk clone short-circuits checkpoint without calling git.
+
+        Why: tests and recovery scenarios run with synthetic clone_path values
+        that do not point to real directories. Calling git there would raise
+        a confusing error instead of just degrading to no-op.
+        """
+        pool, pipeline_id, stage_id = pool_with_stage
+        adapter = _make_mock_adapter()
+        planner = _make_mock_planner()
+        cmgr = _make_mock_clone_manager()
+
+        await run_impl_task_stage(
+            pool=pool,
+            pipeline_id=pipeline_id,
+            stage_id=stage_id,
+            node=_make_node(),
+            adapters={"claude": adapter},
+            log_buffer=log_buffer,
+            cancel_event=cancel_event,
+            pipelines_dir=tmp_pipelines_dir,
+            htn_planner=planner,
+            clone_manager=cmgr,
+        )
+
+        # The seeded clone_path '/tmp/test-clone-impl' does not exist on disk
+        cmgr.create_checkpoint_commit.assert_not_called()

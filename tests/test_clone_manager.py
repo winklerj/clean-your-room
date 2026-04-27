@@ -405,6 +405,129 @@ class TestCaptureDirtyDiff:
 
 
 # ---------------------------------------------------------------------------
+# Checkpoint commit tests
+# ---------------------------------------------------------------------------
+
+
+class TestCreateCheckpointCommit:
+    """Tests for create_checkpoint_commit — local checkpoint commits.
+
+    Spec lines 746/911 require impl_task to record a new head_rev (and
+    optional checkpoint commit) after postconditions pass. Without these
+    commits, code_review's full-head diff (review_base_rev → head_rev) is
+    always empty and the ReviewCoversHead invariant is silently broken.
+    """
+
+    async def test_returns_none_when_clean(self, source_repo: Path) -> None:
+        """create_checkpoint_commit returns None when workspace has no changes.
+
+        Invariant: a no-op task must not produce an empty checkpoint commit.
+        """
+        mgr = CloneManager.__new__(CloneManager)
+        result = await mgr.create_checkpoint_commit(source_repo, "checkpoint: noop")
+        assert result is None
+        # HEAD unchanged
+        log_out = subprocess.run(
+            ["git", "log", "--oneline"],
+            cwd=source_repo, check=True, capture_output=True, text=True,
+        ).stdout.strip()
+        assert log_out.count("\n") == 0  # exactly one commit
+
+    async def test_creates_commit_for_modified_file(self, source_repo: Path) -> None:
+        """create_checkpoint_commit produces a new HEAD when tracked files change.
+
+        Invariant: head_rev advances when the agent edits an existing file.
+        """
+        mgr = CloneManager.__new__(CloneManager)
+        before = await mgr.get_current_rev(source_repo)
+
+        (source_repo / "README.md").write_text("changed by agent\n")
+        new_rev = await mgr.create_checkpoint_commit(source_repo, "checkpoint: x")
+
+        assert new_rev is not None
+        assert new_rev != before
+        assert await mgr.get_current_rev(source_repo) == new_rev
+        # Workspace should be clean after the commit
+        assert await mgr.is_workspace_clean(source_repo)
+
+    async def test_creates_commit_for_untracked_file(self, source_repo: Path) -> None:
+        """create_checkpoint_commit stages and commits new untracked files.
+
+        Invariant: HTN tasks adding new files (the common case) produce a
+        non-empty diff against review_base_rev.
+        """
+        mgr = CloneManager.__new__(CloneManager)
+        before = await mgr.get_current_rev(source_repo)
+
+        (source_repo / "new_module.py").write_text("def f(): pass\n")
+        new_rev = await mgr.create_checkpoint_commit(source_repo, "checkpoint: add")
+
+        assert new_rev is not None
+        assert new_rev != before
+        # The new file is tracked in the new commit.
+        ls = subprocess.run(
+            ["git", "ls-tree", "-r", new_rev, "--name-only"],
+            cwd=source_repo, check=True, capture_output=True, text=True,
+        ).stdout
+        assert "new_module.py" in ls
+
+    async def test_works_without_global_git_identity(
+        self, source_repo: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Checkpoint commits succeed without global user.name/user.email.
+
+        Why: production clones inherit no global identity. The harness must
+        supply its own identity via -c flags so commits do not abort. Spec
+        line 771: "Do not push or publish anything. The harness records local
+        checkpoint revisions after verification."
+        """
+        # Strip per-clone identity that source_repo set up.
+        subprocess.run(
+            ["git", "config", "--unset", "user.email"],
+            cwd=source_repo, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "--unset", "user.name"],
+            cwd=source_repo, capture_output=True,
+        )
+        # Redirect HOME so any global git config does not satisfy the commit.
+        empty_home = tmp_path / "empty_home"
+        empty_home.mkdir()
+        monkeypatch.setenv("HOME", str(empty_home))
+        monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(empty_home / "no.gitconfig"))
+        monkeypatch.setenv("GIT_CONFIG_SYSTEM", "/dev/null")
+
+        mgr = CloneManager.__new__(CloneManager)
+        (source_repo / "f.txt").write_text("data\n")
+        new_rev = await mgr.create_checkpoint_commit(source_repo, "checkpoint: noid")
+
+        assert new_rev is not None
+        # Inspect committer identity recorded in the commit
+        author = subprocess.run(
+            ["git", "log", "-1", "--format=%an <%ae>", new_rev],
+            cwd=source_repo, check=True, capture_output=True, text=True,
+        ).stdout.strip()
+        assert "build-your-room" in author
+
+    async def test_commit_message_recorded(self, source_repo: Path) -> None:
+        """The checkpoint message is preserved on the resulting commit.
+
+        Why: dashboard/forensics rely on commit messages identifying which
+        HTN task each checkpoint corresponds to.
+        """
+        mgr = CloneManager.__new__(CloneManager)
+        (source_repo / "x.txt").write_text("y\n")
+        message = "checkpoint: implement login endpoint"
+        new_rev = await mgr.create_checkpoint_commit(source_repo, message)
+        assert new_rev is not None
+        log_msg = subprocess.run(
+            ["git", "log", "-1", "--format=%s", new_rev],
+            cwd=source_repo, check=True, capture_output=True, text=True,
+        ).stdout.strip()
+        assert log_msg == message
+
+
+# ---------------------------------------------------------------------------
 # Cleanup tests
 # ---------------------------------------------------------------------------
 

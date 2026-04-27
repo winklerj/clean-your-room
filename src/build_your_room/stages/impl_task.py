@@ -23,6 +23,7 @@ from typing import Any
 from psycopg_pool import AsyncConnectionPool
 
 from build_your_room.adapters.base import AgentAdapter, LiveSession, SessionConfig
+from build_your_room.clone_manager import CloneManager, GitError
 from build_your_room.command_registry import (
     CommandRegistry,
     get_default_command_registry,
@@ -64,6 +65,7 @@ async def run_impl_task_stage(
     pipelines_dir: Path | None = None,
     htn_planner: HTNPlanner | None = None,
     command_registry: CommandRegistry | None = None,
+    clone_manager: CloneManager | None = None,
 ) -> str:
     """Run the impl-task stage: claim, execute, verify, and complete HTN tasks.
 
@@ -74,6 +76,8 @@ async def run_impl_task_stage(
 
     pipeline = await _load_pipeline(pool, pipeline_id)
     clone_path = pipeline["clone_path"]
+    cmgr = clone_manager or CloneManager(pool)
+    checkpoint_enabled = _checkpoint_enabled(pipeline.get("config_json"))
 
     sandbox = WorkspaceSandbox.for_pipeline(clone_path, base_dir, pipeline_id)
 
@@ -182,6 +186,8 @@ async def run_impl_task_stage(
             log_buffer=log_buffer,
             cancel_event=cancel_event,
             prompt_body=prompt_body,
+            clone_manager=cmgr,
+            checkpoint_enabled=checkpoint_enabled,
         )
 
         if not task_completed:
@@ -230,6 +236,8 @@ async def _execute_task_with_rotation(
     log_buffer: LogBuffer,
     cancel_event: asyncio.Event,
     prompt_body: str,
+    clone_manager: CloneManager,
+    checkpoint_enabled: bool,
 ) -> bool:
     """Execute a single HTN task, handling context rotation and postconditions.
 
@@ -282,8 +290,28 @@ async def _execute_task_with_rotation(
             failures = [r for r in results if not r.passed]
 
             if not failures:
-                # All postconditions passed
-                newly_ready = await planner.complete_task(task_id, None, "")
+                # All postconditions passed — checkpoint workspace, advance
+                # head_rev, and record the task as completed with the new
+                # revision and a diary entry.
+                checkpoint_rev = await _maybe_create_checkpoint(
+                    pool=pool,
+                    pipeline_id=pipeline_id,
+                    clone_path=clone_path,
+                    clone_manager=clone_manager,
+                    enabled=checkpoint_enabled,
+                    task_name=task_name,
+                    log_buffer=log_buffer,
+                )
+                diary = _build_diary_entry(
+                    task_name=task_name,
+                    task=claimed,
+                    retries=postcondition_retries,
+                    results=results,
+                    checkpoint_rev=checkpoint_rev,
+                )
+                newly_ready = await planner.complete_task(
+                    task_id, checkpoint_rev, diary
+                )
                 await _complete_session(pool, current_session_db_id, "completed")
                 _log(
                     log_buffer, pipeline_id,
@@ -490,6 +518,128 @@ def _build_resume_prompt(base_prompt: str, task: Any) -> str:
         f"Continue working on this task. The previous session ran out of "
         f"context space. Review the current state of the code and continue "
         f"from where the previous session left off."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Checkpoint + diary helpers
+# ---------------------------------------------------------------------------
+
+
+def _checkpoint_enabled(config_json: Any) -> bool:
+    """Return True if the pipeline config opts into local checkpoint commits.
+
+    Defaults to True (matching ``PipelineConfig.checkpoint_commits``) when
+    the column is null or unparseable. The field is treated as advisory —
+    workspace cleanliness is still required before a commit is made.
+    """
+    if config_json is None:
+        return True
+    raw: Any = config_json
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            return True
+    if not isinstance(raw, dict):
+        return True
+    value = raw.get("checkpoint_commits", True)
+    return bool(value)
+
+
+async def _maybe_create_checkpoint(
+    *,
+    pool: AsyncConnectionPool,
+    pipeline_id: int,
+    clone_path: str,
+    clone_manager: CloneManager,
+    enabled: bool,
+    task_name: str,
+    log_buffer: LogBuffer,
+) -> str | None:
+    """Create a local checkpoint commit and advance pipeline.head_rev.
+
+    Returns the new HEAD revision when a commit was created, ``None`` when
+    skipped (disabled, missing clone, clean workspace, or git failure). On
+    git error the failure is logged but never propagated — the postcondition
+    success path must remain the dominant signal for task completion.
+    """
+    if not enabled:
+        return None
+    if not clone_path:
+        return None
+    if not Path(clone_path).exists():
+        _log(
+            log_buffer,
+            pipeline_id,
+            f"Skipping checkpoint for '{task_name}': clone path missing",
+        )
+        return None
+    try:
+        new_rev = await clone_manager.create_checkpoint_commit(
+            clone_path, f"checkpoint: {task_name}"
+        )
+    except GitError as exc:
+        _log(
+            log_buffer,
+            pipeline_id,
+            f"Checkpoint commit failed for '{task_name}': {exc}",
+        )
+        return None
+    if new_rev is None:
+        return None
+    await _update_pipeline_head_rev(pool, pipeline_id, new_rev)
+    _log(
+        log_buffer,
+        pipeline_id,
+        f"Checkpoint commit {new_rev[:8]} for task '{task_name}'",
+    )
+    return new_rev
+
+
+async def _update_pipeline_head_rev(
+    pool: AsyncConnectionPool, pipeline_id: int, new_rev: str
+) -> None:
+    async with pool.connection() as conn:
+        await conn.execute(
+            "UPDATE pipelines SET head_rev = %s, updated_at = now() "
+            "WHERE id = %s",
+            (new_rev, pipeline_id),
+        )
+        await conn.commit()
+
+
+def _build_diary_entry(
+    *,
+    task_name: str,
+    task: Any,
+    retries: int,
+    results: list[Any],
+    checkpoint_rev: str | None,
+) -> str:
+    """Build a structured diary entry for a completed task.
+
+    The diary captures the task's name, complexity, retry count, postcondition
+    pass/fail summary, and checkpoint revision (when one was created). Agent-
+    authored learnings can be appended later via ``htn_tasks.diary_entry``.
+    """
+    complexity = getattr(task, "estimated_complexity", None) or "unspecified"
+    rev_line = (
+        f"Checkpoint revision: `{checkpoint_rev}`\n"
+        if checkpoint_rev
+        else "Checkpoint revision: (no workspace changes)\n"
+    )
+    cond_lines = []
+    for r in results:
+        status = "PASS" if getattr(r, "passed", False) else "FAIL"
+        desc = getattr(r, "description", None) or getattr(r, "type", "condition")
+        cond_lines.append(f"- [{status}] {desc}")
+    cond_block = "\n".join(cond_lines) if cond_lines else "- (no postconditions)"
+    return (
+        f"# Task: {task_name}\n"
+        f"## Complexity: {complexity} | Postcondition retries: {retries}\n\n"
+        f"{rev_line}"
+        f"\n### Postcondition verification\n{cond_block}\n"
     )
 
 

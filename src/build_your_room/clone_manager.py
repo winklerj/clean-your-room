@@ -167,6 +167,47 @@ class CloneManager:
         """Create and checkout a new branch for the pipeline workspace."""
         await _run_git(["checkout", "-b", ref_name], cwd=clone_path)
 
+    async def create_checkpoint_commit(
+        self, clone_path: Path | str, message: str
+    ) -> str | None:
+        """Stage all working-tree changes and create a local checkpoint commit.
+
+        The commit uses an in-process committer identity (``-c user.name``,
+        ``-c user.email``) so it succeeds inside fresh clones with no global
+        git config. The commit is local-only — never pushed.
+
+        Returns the new HEAD revision, or ``None`` if the workspace is clean
+        (no commit was created).
+        """
+        if await self.is_workspace_clean(clone_path):
+            return None
+
+        await _run_git(["add", "-A"], cwd=clone_path)
+
+        # Re-check after staging in case `add -A` produced no actual change
+        # (e.g. only ignored files were present).
+        diff_index = await _run_git(
+            ["diff", "--cached", "--name-only"], cwd=clone_path
+        )
+        if not diff_index:
+            return None
+
+        await _run_git(
+            [
+                "-c",
+                "user.name=build-your-room",
+                "-c",
+                "user.email=build-your-room@local",
+                "commit",
+                "--no-gpg-sign",
+                "--allow-empty-message",
+                "-m",
+                message,
+            ],
+            cwd=clone_path,
+        )
+        return await self.get_current_rev(clone_path)
+
     async def capture_dirty_diff(
         self, clone_path: Path | str, baseline_rev: str
     ) -> str:
