@@ -26,6 +26,7 @@ from build_your_room.stages.code_review import (
     STAGE_RESULT_APPROVED,
     STAGE_RESULT_ESCALATED,
     _build_fix_prompt,
+    _checkpoint_enabled,
     _diff_artifact_path,
     run_code_review_stage,
 )
@@ -1234,3 +1235,481 @@ class TestCodeReviewProperties:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(diff_content)
             assert path.read_text() == diff_content
+
+
+# ---------------------------------------------------------------------------
+# Checkpoint commits + head_rev advancement
+# ---------------------------------------------------------------------------
+
+
+def _make_mock_clone_manager(
+    *, return_rev: str | None = "rev-fix-1"
+) -> AsyncMock:
+    """Build a mock CloneManager whose create_checkpoint_commit is observable."""
+    from build_your_room.clone_manager import CloneManager
+
+    cmgr = AsyncMock(spec=CloneManager)
+    cmgr.create_checkpoint_commit.return_value = return_rev
+    return cmgr
+
+
+async def _seed_clone_dir_for_pipeline(
+    pool: Any, pipeline_id: int, base: Path
+) -> Path:
+    """Materialize a real clone_path on disk so checkpoint wiring's exists() check passes."""
+    clone_dir = base / f"clone-cr-{pipeline_id}"
+    clone_dir.mkdir(parents=True, exist_ok=True)
+    async with pool.connection() as conn:
+        await conn.execute(
+            "UPDATE pipelines SET clone_path = %s WHERE id = %s",
+            (str(clone_dir), pipeline_id),
+        )
+        await conn.commit()
+    return clone_dir
+
+
+class TestCodeReviewCheckpointEnabledHelper:
+    """Tests for _checkpoint_enabled config parser.
+
+    Why: the helper mirrors impl_task's parser; both stages must agree on
+    the default-True semantics so a misconfigured pipeline checkpoints in
+    impl_task but skips in code_review (or vice versa).
+    """
+
+    def test_none_defaults_to_true(self) -> None:
+        assert _checkpoint_enabled(None) is True
+
+    def test_unparseable_defaults_to_true(self) -> None:
+        assert _checkpoint_enabled("not json") is True
+
+    def test_explicit_false(self) -> None:
+        assert _checkpoint_enabled('{"checkpoint_commits": false}') is False
+
+    def test_dict_input_false(self) -> None:
+        assert _checkpoint_enabled({"checkpoint_commits": False}) is False
+
+    def test_missing_key_defaults_to_true(self) -> None:
+        assert _checkpoint_enabled('{"other": 1}') is True
+
+
+class TestCodeReviewCheckpointWiring:
+    """Integration tests: code_review wires fix-agent checkpoint commits.
+
+    Spec lines 866-867 require head_rev to advance after each fix round so
+    the next review inspects the post-fix diff. Without this advance,
+    git diff base...head returns the same diff as round 1 because fix
+    edits are uncommitted, and the bug-fix loop is silently a no-op.
+    """
+
+    @pytest.mark.asyncio
+    async def test_checkpoint_called_after_fix_turn(
+        self,
+        pool_with_stage: Any,
+        log_buffer: LogBuffer,
+        cancel_event: asyncio.Event,
+        tmp_pipelines_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """create_checkpoint_commit is invoked after the fix agent turn."""
+        pool, pipeline_id, stage_id = pool_with_stage
+        await _seed_clone_dir_for_pipeline(pool, pipeline_id, tmp_path)
+        node = _make_node()
+
+        review_s1 = _make_mock_session(
+            structured_output=_rejected_output("medium"), session_id="r-1"
+        )
+        fix_s = _make_mock_session(output="Fixed.", session_id="f-1")
+        review_s2 = _make_mock_session(
+            structured_output=_approved_output("none"), session_id="r-2"
+        )
+        adapter = AsyncMock()
+        adapter.start_session.side_effect = [review_s1, fix_s, review_s2]
+        cmgr = _make_mock_clone_manager(return_rev="newhead-1")
+
+        with patch(
+            "build_your_room.stages.code_review._capture_full_diff",
+            return_value=_MOCK_DIFF,
+        ):
+            result = await run_code_review_stage(
+                pool=pool,
+                pipeline_id=pipeline_id,
+                stage_id=stage_id,
+                node=node,
+                adapters={"codex": adapter},
+                log_buffer=log_buffer,
+                cancel_event=cancel_event,
+                pipelines_dir=tmp_pipelines_dir,
+                clone_manager=cmgr,
+            )
+
+        assert result == STAGE_RESULT_APPROVED
+        cmgr.create_checkpoint_commit.assert_called_once()
+        # head_rev advanced in DB
+        async with pool.connection() as conn:
+            row = await (
+                await conn.execute(
+                    "SELECT head_rev FROM pipelines WHERE id = %s",
+                    (pipeline_id,),
+                )
+            ).fetchone()
+        assert row["head_rev"] == "newhead-1"
+
+    @pytest.mark.asyncio
+    async def test_recapture_diff_uses_new_head_rev(
+        self,
+        pool_with_stage: Any,
+        log_buffer: LogBuffer,
+        cancel_event: asyncio.Event,
+        tmp_pipelines_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """Round 2's diff capture uses the post-checkpoint head_rev, not the original.
+
+        Why: this is the load-bearing assertion for the fix. Round 1 sees
+        head=def456; the fix agent edits the workspace; checkpoint moves
+        head to newhead-2; round 2's _capture_full_diff must be called
+        with newhead-2 so the reviewer sees the post-fix state.
+        """
+        pool, pipeline_id, stage_id = pool_with_stage
+        await _seed_clone_dir_for_pipeline(pool, pipeline_id, tmp_path)
+        node = _make_node()
+
+        review_s1 = _make_mock_session(
+            structured_output=_rejected_output("medium"), session_id="r-1"
+        )
+        fix_s = _make_mock_session(output="Fixed.", session_id="f-1")
+        review_s2 = _make_mock_session(
+            structured_output=_approved_output("none"), session_id="r-2"
+        )
+        adapter = AsyncMock()
+        adapter.start_session.side_effect = [review_s1, fix_s, review_s2]
+        cmgr = _make_mock_clone_manager(return_rev="newhead-2")
+
+        with patch(
+            "build_your_room.stages.code_review._capture_full_diff",
+            return_value=_MOCK_DIFF,
+        ) as mock_diff:
+            await run_code_review_stage(
+                pool=pool,
+                pipeline_id=pipeline_id,
+                stage_id=stage_id,
+                node=node,
+                adapters={"codex": adapter},
+                log_buffer=log_buffer,
+                cancel_event=cancel_event,
+                pipelines_dir=tmp_pipelines_dir,
+                clone_manager=cmgr,
+            )
+
+        # Two diff captures: pre-loop (head=def456) and post-fix (head=newhead-2)
+        assert mock_diff.call_count == 2
+        # First call: original head from DB seed ('def456')
+        first_args = mock_diff.call_args_list[0].args
+        assert first_args[2] == "def456"
+        # Second call: the new checkpoint rev
+        second_args = mock_diff.call_args_list[1].args
+        assert second_args[2] == "newhead-2"
+
+    @pytest.mark.asyncio
+    async def test_checkpoint_skipped_when_disabled(
+        self,
+        pool_with_stage: Any,
+        log_buffer: LogBuffer,
+        cancel_event: asyncio.Event,
+        tmp_pipelines_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """config_json.checkpoint_commits=false → no checkpoint, head_rev unchanged.
+
+        Why: operators must be able to opt out (e.g. read-only repos, or
+        pipelines that drive an external system that already manages
+        version control).
+        """
+        pool, pipeline_id, stage_id = pool_with_stage
+        await _seed_clone_dir_for_pipeline(pool, pipeline_id, tmp_path)
+        async with pool.connection() as conn:
+            await conn.execute(
+                "UPDATE pipelines SET config_json = %s WHERE id = %s",
+                (json.dumps({"checkpoint_commits": False}), pipeline_id),
+            )
+            await conn.commit()
+
+        node = _make_node()
+        review_s1 = _make_mock_session(
+            structured_output=_rejected_output("medium"), session_id="r-1"
+        )
+        fix_s = _make_mock_session(output="Fixed.", session_id="f-1")
+        review_s2 = _make_mock_session(
+            structured_output=_approved_output("none"), session_id="r-2"
+        )
+        adapter = AsyncMock()
+        adapter.start_session.side_effect = [review_s1, fix_s, review_s2]
+        cmgr = _make_mock_clone_manager(return_rev="should-not-be-set")
+
+        with patch(
+            "build_your_room.stages.code_review._capture_full_diff",
+            return_value=_MOCK_DIFF,
+        ):
+            await run_code_review_stage(
+                pool=pool,
+                pipeline_id=pipeline_id,
+                stage_id=stage_id,
+                node=node,
+                adapters={"codex": adapter},
+                log_buffer=log_buffer,
+                cancel_event=cancel_event,
+                pipelines_dir=tmp_pipelines_dir,
+                clone_manager=cmgr,
+            )
+
+        cmgr.create_checkpoint_commit.assert_not_called()
+        async with pool.connection() as conn:
+            row = await (
+                await conn.execute(
+                    "SELECT head_rev FROM pipelines WHERE id = %s",
+                    (pipeline_id,),
+                )
+            ).fetchone()
+        # head_rev unchanged from original seed
+        assert row["head_rev"] == "def456"
+
+    @pytest.mark.asyncio
+    async def test_clean_workspace_after_fix_no_op(
+        self,
+        pool_with_stage: Any,
+        log_buffer: LogBuffer,
+        cancel_event: asyncio.Event,
+        tmp_pipelines_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """Fix agent made no edits → checkpoint returns None → head_rev unchanged.
+
+        Why: the fix agent might have decided no code change was needed
+        (e.g. suggested doc changes only). create_checkpoint_commit returns
+        None for a clean workspace; head_rev should not regress.
+        """
+        pool, pipeline_id, stage_id = pool_with_stage
+        await _seed_clone_dir_for_pipeline(pool, pipeline_id, tmp_path)
+        node = _make_node()
+
+        review_s1 = _make_mock_session(
+            structured_output=_rejected_output("medium"), session_id="r-1"
+        )
+        fix_s = _make_mock_session(output="No changes needed.", session_id="f-1")
+        review_s2 = _make_mock_session(
+            structured_output=_approved_output("none"), session_id="r-2"
+        )
+        adapter = AsyncMock()
+        adapter.start_session.side_effect = [review_s1, fix_s, review_s2]
+        cmgr = _make_mock_clone_manager(return_rev=None)  # clean workspace
+
+        with patch(
+            "build_your_room.stages.code_review._capture_full_diff",
+            return_value=_MOCK_DIFF,
+        ):
+            await run_code_review_stage(
+                pool=pool,
+                pipeline_id=pipeline_id,
+                stage_id=stage_id,
+                node=node,
+                adapters={"codex": adapter},
+                log_buffer=log_buffer,
+                cancel_event=cancel_event,
+                pipelines_dir=tmp_pipelines_dir,
+                clone_manager=cmgr,
+            )
+
+        cmgr.create_checkpoint_commit.assert_called_once()
+        async with pool.connection() as conn:
+            row = await (
+                await conn.execute(
+                    "SELECT head_rev FROM pipelines WHERE id = %s",
+                    (pipeline_id,),
+                )
+            ).fetchone()
+        # head_rev unchanged from original seed (no commit was made)
+        assert row["head_rev"] == "def456"
+
+    @pytest.mark.asyncio
+    async def test_git_error_does_not_abort_loop(
+        self,
+        pool_with_stage: Any,
+        log_buffer: LogBuffer,
+        cancel_event: asyncio.Event,
+        tmp_pipelines_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """GitError on checkpoint is logged but does not abort the review loop.
+
+        Why: parity with impl_task — losing a checkpoint is recoverable,
+        but stranding the pipeline mid-fix would silently lose the review
+        outcome. The loop must continue.
+        """
+        from build_your_room.clone_manager import GitError
+
+        pool, pipeline_id, stage_id = pool_with_stage
+        await _seed_clone_dir_for_pipeline(pool, pipeline_id, tmp_path)
+        node = _make_node()
+
+        review_s1 = _make_mock_session(
+            structured_output=_rejected_output("medium"), session_id="r-1"
+        )
+        fix_s = _make_mock_session(output="Fixed.", session_id="f-1")
+        review_s2 = _make_mock_session(
+            structured_output=_approved_output("none"), session_id="r-2"
+        )
+        adapter = AsyncMock()
+        adapter.start_session.side_effect = [review_s1, fix_s, review_s2]
+        cmgr = _make_mock_clone_manager()
+        cmgr.create_checkpoint_commit.side_effect = GitError(
+            ["git", "commit"], 128, "fatal: not a git repo"
+        )
+
+        with patch(
+            "build_your_room.stages.code_review._capture_full_diff",
+            return_value=_MOCK_DIFF,
+        ):
+            result = await run_code_review_stage(
+                pool=pool,
+                pipeline_id=pipeline_id,
+                stage_id=stage_id,
+                node=node,
+                adapters={"codex": adapter},
+                log_buffer=log_buffer,
+                cancel_event=cancel_event,
+                pipelines_dir=tmp_pipelines_dir,
+                clone_manager=cmgr,
+            )
+
+        # Loop completed despite the GitError
+        assert result == STAGE_RESULT_APPROVED
+        history = log_buffer.get_history(pipeline_id)
+        assert any("Fix checkpoint" in m and "failed" in m for m in history)
+
+    @pytest.mark.asyncio
+    async def test_checkpoint_skipped_when_clone_path_missing(
+        self,
+        pool_with_stage: Any,
+        log_buffer: LogBuffer,
+        cancel_event: asyncio.Event,
+        tmp_pipelines_dir: Path,
+    ) -> None:
+        """Missing on-disk clone short-circuits checkpoint without calling git.
+
+        Why: synthetic clone_path values from tests/recovery scenarios
+        should degrade to no-op rather than raise a confusing git error.
+        """
+        pool, pipeline_id, stage_id = pool_with_stage
+        # The seeded clone_path '/tmp/test-clone-cr' does not exist on disk
+        node = _make_node()
+
+        review_s1 = _make_mock_session(
+            structured_output=_rejected_output("medium"), session_id="r-1"
+        )
+        fix_s = _make_mock_session(output="Fixed.", session_id="f-1")
+        review_s2 = _make_mock_session(
+            structured_output=_approved_output("none"), session_id="r-2"
+        )
+        adapter = AsyncMock()
+        adapter.start_session.side_effect = [review_s1, fix_s, review_s2]
+        cmgr = _make_mock_clone_manager(return_rev="should-not-be-set")
+
+        with patch(
+            "build_your_room.stages.code_review._capture_full_diff",
+            return_value=_MOCK_DIFF,
+        ):
+            await run_code_review_stage(
+                pool=pool,
+                pipeline_id=pipeline_id,
+                stage_id=stage_id,
+                node=node,
+                adapters={"codex": adapter},
+                log_buffer=log_buffer,
+                cancel_event=cancel_event,
+                pipelines_dir=tmp_pipelines_dir,
+                clone_manager=cmgr,
+            )
+
+        cmgr.create_checkpoint_commit.assert_not_called()
+        async with pool.connection() as conn:
+            row = await (
+                await conn.execute(
+                    "SELECT head_rev FROM pipelines WHERE id = %s",
+                    (pipeline_id,),
+                )
+            ).fetchone()
+        assert row["head_rev"] == "def456"
+
+    @pytest.mark.asyncio
+    async def test_two_fix_rounds_advance_head_rev_in_sequence(
+        self,
+        pool_with_stage: Any,
+        log_buffer: LogBuffer,
+        cancel_event: asyncio.Event,
+        tmp_pipelines_dir: Path,
+        tmp_path: Path,
+    ) -> None:
+        """Two fix rounds → two checkpoints → final head_rev = last commit.
+
+        Property: head_rev monotonically advances as fix rounds make
+        progress. The final review (round 3) inspects the diff up to
+        the most recent checkpoint, not the original or middle revision.
+        """
+        pool, pipeline_id, stage_id = pool_with_stage
+        await _seed_clone_dir_for_pipeline(pool, pipeline_id, tmp_path)
+        node = _make_node(max_iterations=3)
+
+        # Sequence: review1 (reject) → fix1 → review2 (reject) → fix2 → review3 (approve)
+        review_s1 = _make_mock_session(
+            structured_output=_rejected_output("medium"), session_id="r-1"
+        )
+        fix_s1 = _make_mock_session(output="Round 1 fix.", session_id="f-1")
+        review_s2 = _make_mock_session(
+            structured_output=_rejected_output("medium"), session_id="r-2"
+        )
+        fix_s2 = _make_mock_session(output="Round 2 fix.", session_id="f-2")
+        review_s3 = _make_mock_session(
+            structured_output=_approved_output("none"), session_id="r-3"
+        )
+        adapter = AsyncMock()
+        adapter.start_session.side_effect = [
+            review_s1, fix_s1, review_s2, fix_s2, review_s3,
+        ]
+        cmgr = _make_mock_clone_manager()
+        cmgr.create_checkpoint_commit.side_effect = ["rev-fix-A", "rev-fix-B"]
+
+        with patch(
+            "build_your_room.stages.code_review._capture_full_diff",
+            return_value=_MOCK_DIFF,
+        ) as mock_diff:
+            result = await run_code_review_stage(
+                pool=pool,
+                pipeline_id=pipeline_id,
+                stage_id=stage_id,
+                node=node,
+                adapters={"codex": adapter},
+                log_buffer=log_buffer,
+                cancel_event=cancel_event,
+                pipelines_dir=tmp_pipelines_dir,
+                clone_manager=cmgr,
+            )
+
+        assert result == STAGE_RESULT_APPROVED
+        assert cmgr.create_checkpoint_commit.call_count == 2
+
+        async with pool.connection() as conn:
+            row = await (
+                await conn.execute(
+                    "SELECT head_rev FROM pipelines WHERE id = %s",
+                    (pipeline_id,),
+                )
+            ).fetchone()
+        # Final head_rev is the last fix checkpoint
+        assert row["head_rev"] == "rev-fix-B"
+
+        # The third diff capture (after fix 2) should use rev-fix-B
+        # Calls: pre-loop (def456), after fix1 (rev-fix-A), after fix2 (rev-fix-B)
+        assert mock_diff.call_count == 3
+        assert mock_diff.call_args_list[0].args[2] == "def456"
+        assert mock_diff.call_args_list[1].args[2] == "rev-fix-A"
+        assert mock_diff.call_args_list[2].args[2] == "rev-fix-B"

@@ -20,6 +20,7 @@ from typing import Any
 from psycopg_pool import AsyncConnectionPool
 
 from build_your_room.adapters.base import AgentAdapter, SessionConfig
+from build_your_room.clone_manager import CloneManager, GitError
 from build_your_room.command_registry import (
     CommandRegistry,
     get_default_command_registry,
@@ -58,6 +59,7 @@ async def run_code_review_stage(
     cancel_event: asyncio.Event,
     pipelines_dir: Path | None = None,
     command_registry: CommandRegistry | None = None,
+    clone_manager: CloneManager | None = None,
 ) -> str:
     """Run the code-review stage: review the full diff and fix issues.
 
@@ -70,6 +72,8 @@ async def run_code_review_stage(
     clone_path = pipeline["clone_path"]
     review_base_rev = pipeline["review_base_rev"]
     head_rev = pipeline["head_rev"] or review_base_rev
+    cmgr = clone_manager or CloneManager(pool)
+    checkpoint_enabled = _checkpoint_enabled(pipeline.get("config_json"))
 
     sandbox = WorkspaceSandbox.for_pipeline(clone_path, base_dir, pipeline_id)
     cmd_reg = command_registry or get_default_command_registry()
@@ -222,6 +226,22 @@ async def run_code_review_stage(
             session_db_id=fix_session_db_id,
         )
 
+        # Checkpoint the fix-agent's edits so the next review round inspects
+        # the post-fix diff. Without this advance, ``git diff base...head``
+        # never moves and round N+1 sees the same diff as round N — the
+        # bug-fix loop becomes a no-op (spec lines 866-867).
+        new_head_rev = await _maybe_create_review_checkpoint(
+            pool=pool,
+            pipeline_id=pipeline_id,
+            clone_path=clone_path,
+            clone_manager=cmgr,
+            enabled=checkpoint_enabled,
+            round_num=round_num,
+            log_buffer=log_buffer,
+        )
+        if new_head_rev is not None:
+            head_rev = new_head_rev
+
         # Re-capture the diff after fixes
         current_diff = await _capture_full_diff(clone_path, review_base_rev, head_rev)
 
@@ -357,6 +377,95 @@ async def _handle_max_rounds(
         },
     )
     return STAGE_RESULT_ESCALATED
+
+
+# ---------------------------------------------------------------------------
+# Checkpoint helpers
+# ---------------------------------------------------------------------------
+
+
+def _checkpoint_enabled(config_json: Any) -> bool:
+    """Return True if the pipeline opts into local checkpoint commits.
+
+    Mirrors the impl_task helper: defaults to True (matching
+    ``PipelineConfig.checkpoint_commits``) when the column is null,
+    unparseable, or not a dict. The flag is advisory — workspace
+    cleanliness is still required before a commit is made.
+    """
+    if config_json is None:
+        return True
+    raw: Any = config_json
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            return True
+    if not isinstance(raw, dict):
+        return True
+    return bool(raw.get("checkpoint_commits", True))
+
+
+async def _maybe_create_review_checkpoint(
+    *,
+    pool: AsyncConnectionPool,
+    pipeline_id: int,
+    clone_path: str,
+    clone_manager: CloneManager,
+    enabled: bool,
+    round_num: int,
+    log_buffer: LogBuffer,
+) -> str | None:
+    """Checkpoint fix-agent edits and advance pipeline head_rev.
+
+    Returns the new HEAD revision when a commit was created, or ``None``
+    when skipped (disabled, missing clone, clean workspace, or git
+    failure). On git error the failure is logged but never propagated —
+    losing a checkpoint is recoverable, but aborting the review loop
+    would strand the pipeline mid-fix.
+    """
+    if not enabled:
+        return None
+    if not clone_path:
+        return None
+    if not Path(clone_path).exists():
+        _log(
+            log_buffer,
+            pipeline_id,
+            f"Skipping fix checkpoint round {round_num}: clone path missing",
+        )
+        return None
+    try:
+        new_rev = await clone_manager.create_checkpoint_commit(
+            clone_path, f"checkpoint: code_review fix round {round_num}"
+        )
+    except GitError as exc:
+        _log(
+            log_buffer,
+            pipeline_id,
+            f"Fix checkpoint round {round_num} failed: {exc}",
+        )
+        return None
+    if new_rev is None:
+        return None
+    await _update_pipeline_head_rev(pool, pipeline_id, new_rev)
+    _log(
+        log_buffer,
+        pipeline_id,
+        f"Fix checkpoint round {round_num}: head_rev → {new_rev[:8]}",
+    )
+    return new_rev
+
+
+async def _update_pipeline_head_rev(
+    pool: AsyncConnectionPool, pipeline_id: int, new_rev: str
+) -> None:
+    async with pool.connection() as conn:
+        await conn.execute(
+            "UPDATE pipelines SET head_rev = %s, updated_at = now() "
+            "WHERE id = %s",
+            (new_rev, pipeline_id),
+        )
+        await conn.commit()
 
 
 # ---------------------------------------------------------------------------
