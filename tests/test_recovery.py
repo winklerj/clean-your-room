@@ -584,6 +584,266 @@ class TestHandleCancellation:
 
 
 # ---------------------------------------------------------------------------
+# Kill cleanup tests
+# ---------------------------------------------------------------------------
+
+
+class TestHandleKill:
+    """Tests for ``RecoveryManager.handle_kill()``.
+
+    Spec lines 539-541: kill must terminate sessions, snapshot dirty
+    workspace, reset to baseline, release HTN claims, and mark the pipeline
+    ``killed``. Differs from cancellation in that the terminal status is
+    ``killed`` (not ``cancelled``) and snapshot is forced even when
+    ``workspace_state='clean'`` because kill bypasses the cooperative
+    cancel-event boundary where the orchestrator would otherwise sync the
+    hint.
+    """
+
+    async def test_marks_pipeline_killed(self, initialized_db):
+        """Kill sets pipeline status to killed."""
+        pool = get_pool()
+        pid = await _seed_pipeline(pool, status="running")
+
+        mgr = RecoveryManager(pool, LogBuffer())
+        await mgr.handle_kill(pid)
+
+        async with pool.connection() as conn:
+            row = await (
+                await conn.execute(
+                    "SELECT status FROM pipelines WHERE id = %s", (pid,)
+                )
+            ).fetchone()
+        assert row["status"] == "killed"
+
+    async def test_releases_htn_claims(self, initialized_db):
+        """In-progress HTN tasks get released back to ready during kill."""
+        pool = get_pool()
+        pid = await _seed_pipeline(pool, status="running")
+
+        async with pool.connection() as conn:
+            await conn.execute(
+                "INSERT INTO htn_tasks "
+                "(pipeline_id, name, description, task_type, status, priority, ordering, "
+                " claim_token, claim_owner_token) "
+                "VALUES (%s, 'task-1', 'desc', 'primitive', 'in_progress', 1, 1, "
+                " 'claim-tok', 'owner-tok')",
+                (pid,),
+            )
+            await conn.commit()
+
+        mgr = RecoveryManager(pool, LogBuffer())
+        await mgr.handle_kill(pid)
+
+        async with pool.connection() as conn:
+            task_row = await (
+                await conn.execute(
+                    "SELECT status, claim_token, assigned_session_id "
+                    "FROM htn_tasks WHERE pipeline_id = %s",
+                    (pid,),
+                )
+            ).fetchone()
+        assert task_row["status"] == "ready"
+        assert task_row["claim_token"] is None
+        assert task_row["assigned_session_id"] is None
+
+    async def test_marks_running_sessions_killed(self, initialized_db):
+        """Running agent sessions get marked status='killed' during kill."""
+        pool = get_pool()
+        pid = await _seed_pipeline(pool, status="running")
+
+        async with pool.connection() as conn:
+            stage_row = await (
+                await conn.execute(
+                    "INSERT INTO pipeline_stages "
+                    "(pipeline_id, stage_key, stage_type, agent_type, status, max_iterations) "
+                    "VALUES (%s, 'spec_author', 'spec_author', 'claude', 'running', 1) "
+                    "RETURNING id",
+                    (pid,),
+                )
+            ).fetchone()
+            await conn.execute(
+                "INSERT INTO agent_sessions "
+                "(pipeline_stage_id, session_type, status) "
+                "VALUES (%s, 'claude_sdk', 'running')",
+                (stage_row["id"],),
+            )
+            await conn.commit()
+
+        mgr = RecoveryManager(pool, LogBuffer())
+        await mgr.handle_kill(pid)
+
+        async with pool.connection() as conn:
+            sess_row = await (
+                await conn.execute(
+                    "SELECT status, completed_at FROM agent_sessions "
+                    "WHERE pipeline_stage_id IN ("
+                    "  SELECT id FROM pipeline_stages WHERE pipeline_id = %s"
+                    ")",
+                    (pid,),
+                )
+            ).fetchone()
+        assert sess_row["status"] == "killed"
+        assert sess_row["completed_at"] is not None
+
+    async def test_marks_running_stages_killed(self, initialized_db):
+        """Running stages get marked status='killed' during kill."""
+        pool = get_pool()
+        pid = await _seed_pipeline(pool, status="running")
+
+        async with pool.connection() as conn:
+            await conn.execute(
+                "INSERT INTO pipeline_stages "
+                "(pipeline_id, stage_key, stage_type, agent_type, status, max_iterations) "
+                "VALUES (%s, 'impl_task', 'impl_task', 'claude', 'running', 50)",
+                (pid,),
+            )
+            await conn.commit()
+
+        mgr = RecoveryManager(pool, LogBuffer())
+        await mgr.handle_kill(pid)
+
+        async with pool.connection() as conn:
+            stage_row = await (
+                await conn.execute(
+                    "SELECT status FROM pipeline_stages WHERE pipeline_id = %s",
+                    (pid,),
+                )
+            ).fetchone()
+        assert stage_row["status"] == "killed"
+
+    async def test_force_snapshot_even_when_workspace_state_clean(
+        self, initialized_db, tmp_path
+    ):
+        """Kill always snapshots, even when ``workspace_state`` reports clean.
+
+        Kill interrupts mid-stage so the in-DB ``workspace_state`` hint may
+        not have been updated to ``dirty_live`` before the cancel_event
+        could fire. ``handle_kill`` therefore forces a snapshot to capture
+        any uncheckpointed work.
+        """
+        pool = get_pool()
+        clone = tmp_path / "clone"
+        baseline_rev = _init_git_repo(clone)
+        # Modify a tracked file so git status reports dirty even though
+        # workspace_state in the DB still says 'clean' (the orchestrator
+        # never had a chance to update it).
+        (clone / "README.md").write_text("# uncheckpointed work\n")
+
+        pid = await _seed_pipeline(
+            pool,
+            status="running",
+            clone_path=str(clone),
+            workspace_state="clean",
+        )
+        async with pool.connection() as conn:
+            await conn.execute(
+                "UPDATE pipelines SET review_base_rev = %s WHERE id = %s",
+                (baseline_rev, pid),
+            )
+            await conn.commit()
+
+        mgr = RecoveryManager(
+            pool,
+            LogBuffer(),
+            pipelines_dir=tmp_path / "pipelines",
+            clone_manager=CloneManager(pool),
+        )
+        await mgr.handle_kill(pid)
+
+        async with pool.connection() as conn:
+            row = await (
+                await conn.execute(
+                    "SELECT dirty_snapshot_artifact FROM pipelines WHERE id = %s",
+                    (pid,),
+                )
+            ).fetchone()
+        assert row["dirty_snapshot_artifact"] is not None
+        # Patch should have captured the uncheckpointed change
+        patch_file = Path(row["dirty_snapshot_artifact"]) / "patch.diff"
+        assert patch_file.exists()
+        assert "uncheckpointed work" in patch_file.read_text()
+        # Clone should be reset to baseline
+        assert (clone / "README.md").read_text() == "# baseline\n"
+
+    async def test_idempotent_on_already_killed(self, initialized_db):
+        """Re-running handle_kill on an already-killed pipeline is safe.
+
+        Kill is callable both during the initial kill request and after
+        server restart for stale 'killed'-but-still-needing-cleanup rows.
+        Running it twice should leave the same final state without raising.
+        """
+        pool = get_pool()
+        pid = await _seed_pipeline(pool, status="killed")
+
+        mgr = RecoveryManager(pool, LogBuffer())
+        await mgr.handle_kill(pid)
+        # Second call: must not raise.
+        await mgr.handle_kill(pid)
+
+        async with pool.connection() as conn:
+            row = await (
+                await conn.execute(
+                    "SELECT status FROM pipelines WHERE id = %s", (pid,)
+                )
+            ).fetchone()
+        assert row["status"] == "killed"
+
+    async def test_closes_log_buffer(self, initialized_db):
+        """Kill appends 'Pipeline killed' and closes the log buffer."""
+        pool = get_pool()
+        pid = await _seed_pipeline(pool, status="running")
+
+        log_buffer = LogBuffer()
+        mgr = RecoveryManager(pool, log_buffer)
+        await mgr.handle_kill(pid)
+
+        assert pid in log_buffer._closed
+
+    async def test_does_not_disturb_completed_stages(self, initialized_db):
+        """Stages that completed before the kill keep their terminal status.
+
+        Spec invariant: kill should not rewrite stage rows that already
+        reached a terminal state. Only ``running`` and ``review_loop``
+        stages flip to ``killed``.
+        """
+        pool = get_pool()
+        pid = await _seed_pipeline(pool, status="running")
+
+        async with pool.connection() as conn:
+            await conn.execute(
+                "INSERT INTO pipeline_stages "
+                "(pipeline_id, stage_key, stage_type, agent_type, status, "
+                " max_iterations, completed_at) "
+                "VALUES (%s, 'spec_author', 'spec_author', 'claude', 'completed', 1, now())",
+                (pid,),
+            )
+            await conn.execute(
+                "INSERT INTO pipeline_stages "
+                "(pipeline_id, stage_key, stage_type, agent_type, status, max_iterations) "
+                "VALUES (%s, 'impl_task', 'impl_task', 'claude', 'running', 50)",
+                (pid,),
+            )
+            await conn.commit()
+
+        mgr = RecoveryManager(pool, LogBuffer())
+        await mgr.handle_kill(pid)
+
+        async with pool.connection() as conn:
+            stages = await (
+                await conn.execute(
+                    "SELECT stage_key, status FROM pipeline_stages "
+                    "WHERE pipeline_id = %s ORDER BY stage_key",
+                    (pid,),
+                )
+            ).fetchall()
+
+        status_by_key = {s["stage_key"]: s["status"] for s in stages}
+        assert status_by_key["spec_author"] == "completed"
+        assert status_by_key["impl_task"] == "killed"
+
+
+# ---------------------------------------------------------------------------
 # Visit count loading tests
 # ---------------------------------------------------------------------------
 

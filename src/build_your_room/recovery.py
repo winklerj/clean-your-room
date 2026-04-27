@@ -361,6 +361,48 @@ class RecoveryManager:
         self, pipeline_id: int, owner_token: str
     ) -> None:
         """Handle cooperative cancellation: snapshot, reset claims, mark cancelled."""
+        await self._terminate_pipeline(
+            pipeline_id, terminal_status="cancelled", force_snapshot=False
+        )
+
+    async def handle_kill(self, pipeline_id: int, owner_token: str | None = None) -> None:
+        """Handle forceful kill: snapshot regardless of dirty hint, mark killed.
+
+        Differs from :meth:`handle_cancellation` in two ways:
+
+        - ``terminal_status`` is ``'killed'`` so sessions/stages/pipeline rows
+          land in the kill terminal state.
+        - ``force_snapshot=True`` always inspects the working tree even when
+          ``workspace_state`` reports clean. Kill bypasses the cooperative
+          ``cancel_event`` boundary, so the orchestrator may not have had a
+          chance to update ``workspace_state``; trust git over the hint.
+
+        Idempotent: re-running on an already-killed pipeline is a no-op for
+        rows already in their terminal state.
+        """
+        await self._terminate_pipeline(
+            pipeline_id, terminal_status="killed", force_snapshot=True
+        )
+
+    async def _terminate_pipeline(
+        self,
+        pipeline_id: int,
+        *,
+        terminal_status: str,
+        force_snapshot: bool,
+    ) -> None:
+        """Shared cancellation/kill cascade.
+
+        Spec lines 538-541: both cancel and kill must (1) snapshot any dirty
+        workspace into ``state/recovery/`` and reset the clone, (2) release
+        HTN claims back to ``ready``, (3) mark live sessions/stages with the
+        terminal status, (4) mark the pipeline with the terminal status.
+
+        Cancel snapshots only when the workspace looks dirty (cooperative
+        cancel runs at safe boundaries where ``workspace_state`` is already
+        synced). Kill ``force_snapshot``s because it interrupts mid-stage and
+        the dirty hint may be stale.
+        """
         async with self._pool.connection() as conn:
             pipeline_row: dict[str, Any] | None = await (  # type: ignore[assignment]
                 await conn.execute(
@@ -370,15 +412,19 @@ class RecoveryManager:
                 )
             ).fetchone()
 
-            if pipeline_row and await self._workspace_appears_dirty(
-                pipeline_row["workspace_state"], pipeline_row["clone_path"]
-            ):
-                baseline = pipeline_row["head_rev"] or pipeline_row["review_base_rev"]
-                await self.snapshot_dirty_workspace(
-                    pipeline_id, baseline, pipeline_row["clone_path"], conn=conn
+            if pipeline_row is not None:
+                should_snapshot = force_snapshot or await self._workspace_appears_dirty(
+                    pipeline_row["workspace_state"], pipeline_row["clone_path"]
                 )
+                if should_snapshot:
+                    baseline = pipeline_row["head_rev"] or pipeline_row["review_base_rev"]
+                    await self.snapshot_dirty_workspace(
+                        pipeline_id, baseline, pipeline_row["clone_path"], conn=conn
+                    )
 
-            # Release in-progress HTN task claims back to ready
+            # Release in-progress HTN task claims back to ready so a future
+            # pipeline run can re-claim them (cancel) or so the killed
+            # pipeline does not leave orphaned in_progress rows (kill).
             await conn.execute(
                 "UPDATE htn_tasks SET status = 'ready', assigned_session_id = NULL, "
                 "claim_token = NULL, claim_owner_token = NULL, claim_expires_at = NULL "
@@ -386,29 +432,31 @@ class RecoveryManager:
                 (pipeline_id,),
             )
 
-            # Mark running sessions as cancelled
+            # Mark running sessions as terminated. We map cancel→cancelled and
+            # kill→killed to match the agent_sessions.status enum (see spec
+            # data model at line 127).
             await conn.execute(
-                "UPDATE agent_sessions SET status = 'cancelled', completed_at = now() "
+                "UPDATE agent_sessions SET status = %s, completed_at = now() "
                 "WHERE pipeline_stage_id IN ("
                 "  SELECT id FROM pipeline_stages WHERE pipeline_id = %s"
                 ") AND status = 'running'",
-                (pipeline_id,),
+                (terminal_status, pipeline_id),
             )
 
-            # Mark running stages as cancelled
+            # Mark running stages with the terminal status.
             await conn.execute(
-                "UPDATE pipeline_stages SET status = 'cancelled', completed_at = now() "
+                "UPDATE pipeline_stages SET status = %s, completed_at = now() "
                 "WHERE pipeline_id = %s AND status IN ('running', 'review_loop')",
-                (pipeline_id,),
+                (terminal_status, pipeline_id),
             )
 
             await conn.execute(
-                "UPDATE pipelines SET status = 'cancelled', updated_at = now() WHERE id = %s",
-                (pipeline_id,),
+                "UPDATE pipelines SET status = %s, updated_at = now() WHERE id = %s",
+                (terminal_status, pipeline_id),
             )
             await conn.commit()
 
-        self._log_buffer.append(pipeline_id, "Pipeline cancelled")
+        self._log_buffer.append(pipeline_id, f"Pipeline {terminal_status}")
         self._log_buffer.close(pipeline_id)
 
     # ------------------------------------------------------------------

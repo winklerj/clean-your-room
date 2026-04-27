@@ -596,6 +596,221 @@ class TestPipelineLifecycle:
             ).fetchone()
         assert row["status"] == "killed"
 
+    async def test_kill_pipeline_releases_htn_claims(self, initialized_db):
+        """Kill must release in-progress HTN claims so they aren't orphaned.
+
+        Spec line 540: kill ``releases claims`` even when the pipeline was
+        not in ``_active_pipelines`` (server-restart case).
+        """
+        pool = get_pool()
+        pid = await _seed_pipeline(pool, status="running")
+
+        async with pool.connection() as conn:
+            await conn.execute(
+                "INSERT INTO htn_tasks "
+                "(pipeline_id, name, description, task_type, status, priority, ordering, "
+                " claim_token, claim_owner_token) "
+                "VALUES (%s, 'task-a', 'desc', 'primitive', 'in_progress', 1, 1, "
+                " 'claim-tok', 'owner-tok')",
+                (pid,),
+            )
+            await conn.commit()
+
+        orch = PipelineOrchestrator(pool, LogBuffer())
+        await orch.kill_pipeline(pid)
+
+        async with pool.connection() as conn:
+            task_row = await (
+                await conn.execute(
+                    "SELECT status, claim_token FROM htn_tasks WHERE pipeline_id = %s",
+                    (pid,),
+                )
+            ).fetchone()
+        assert task_row["status"] == "ready"
+        assert task_row["claim_token"] is None
+
+    async def test_kill_pipeline_marks_running_sessions_killed(self, initialized_db):
+        """Kill must mark live agent sessions and stages with status='killed'.
+
+        Mirrors the cancel cascade but with the 'killed' terminal status
+        from the agent_sessions / pipeline_stages enums.
+        """
+        pool = get_pool()
+        pid = await _seed_pipeline(pool, status="running")
+
+        async with pool.connection() as conn:
+            stage_row = await (
+                await conn.execute(
+                    "INSERT INTO pipeline_stages "
+                    "(pipeline_id, stage_key, stage_type, agent_type, status, max_iterations) "
+                    "VALUES (%s, 'impl_task', 'impl_task', 'claude', 'running', 50) "
+                    "RETURNING id",
+                    (pid,),
+                )
+            ).fetchone()
+            await conn.execute(
+                "INSERT INTO agent_sessions "
+                "(pipeline_stage_id, session_type, status) "
+                "VALUES (%s, 'claude_sdk', 'running')",
+                (stage_row["id"],),
+            )
+            await conn.commit()
+
+        orch = PipelineOrchestrator(pool, LogBuffer())
+        await orch.kill_pipeline(pid)
+
+        async with pool.connection() as conn:
+            sess_row = await (
+                await conn.execute(
+                    "SELECT status FROM agent_sessions "
+                    "WHERE pipeline_stage_id IN ("
+                    "  SELECT id FROM pipeline_stages WHERE pipeline_id = %s"
+                    ")",
+                    (pid,),
+                )
+            ).fetchone()
+            stage_check = await (
+                await conn.execute(
+                    "SELECT status FROM pipeline_stages WHERE pipeline_id = %s",
+                    (pid,),
+                )
+            ).fetchone()
+
+        assert sess_row["status"] == "killed"
+        assert stage_check["status"] == "killed"
+
+    async def test_kill_pipeline_drains_active_task(self, initialized_db):
+        """Kill cancels the active asyncio task and awaits its drain.
+
+        We register a fake long-running task in ``_active_pipelines`` and
+        verify ``kill_pipeline`` cancels it and finishes (i.e. doesn't leave
+        the task pending). This guards against the prior behaviour where
+        kill returned before the SDK adapter's ``__aexit__`` could run.
+        """
+        pool = get_pool()
+        pid = await _seed_pipeline(pool, status="running")
+
+        orch = PipelineOrchestrator(pool, LogBuffer())
+
+        cancel_event = asyncio.Event()
+        started = asyncio.Event()
+
+        async def long_running() -> None:
+            started.set()
+            try:
+                # Sleep for a long time; kill will cancel us.
+                await asyncio.sleep(3600)
+            except asyncio.CancelledError:
+                # Simulate adapter __aexit__ doing brief cleanup.
+                await asyncio.sleep(0)
+                raise
+
+        fake_task = asyncio.create_task(long_running(), name=f"fake-{pid}")
+        orch._active_pipelines[pid] = (fake_task, cancel_event)
+        await started.wait()
+
+        await orch.kill_pipeline(pid)
+
+        # The fake task must have been awaited to completion (cancelled).
+        assert fake_task.done()
+        # The active-pipelines slot must be cleared.
+        assert pid not in orch._active_pipelines
+        async with pool.connection() as conn:
+            row = await (
+                await conn.execute("SELECT status FROM pipelines WHERE id = %s", (pid,))
+            ).fetchone()
+        assert row["status"] == "killed"
+
+    async def test_kill_pipeline_drain_timeout_does_not_block(self, initialized_db):
+        """A hung task must not stall ``kill_pipeline`` past the drain timeout.
+
+        Simulates an SDK that ignores ``CancelledError`` (e.g., a subprocess
+        write that swallows interrupts). The kill path must still complete
+        within roughly ``kill_drain_timeout_sec`` and proceed to the DB
+        cascade. Bound the assertion at 2x the timeout to be tolerant of
+        scheduling jitter.
+        """
+        pool = get_pool()
+        pid = await _seed_pipeline(pool, status="running")
+
+        orch = PipelineOrchestrator(pool, LogBuffer(), kill_drain_timeout_sec=0.1)
+
+        cancel_event = asyncio.Event()
+        started = asyncio.Event()
+
+        async def hung_task() -> None:
+            started.set()
+            # Shielded sleep — ignores cancellation, mimicking a stuck
+            # subprocess write.
+            try:
+                await asyncio.shield(asyncio.sleep(3600))
+            except asyncio.CancelledError:
+                # Re-enter the shield once more so the timeout actually
+                # fires; in production the SDK would eventually give up.
+                await asyncio.shield(asyncio.sleep(3600))
+
+        fake_task = asyncio.create_task(hung_task(), name=f"hung-{pid}")
+        orch._active_pipelines[pid] = (fake_task, cancel_event)
+        await started.wait()
+
+        loop = asyncio.get_event_loop()
+        t0 = loop.time()
+        await orch.kill_pipeline(pid)
+        elapsed = loop.time() - t0
+        assert elapsed < 2.0, f"kill_pipeline blocked for {elapsed:.2f}s"
+
+        # Even though the task is still hanging, the DB must reflect killed.
+        async with pool.connection() as conn:
+            row = await (
+                await conn.execute("SELECT status FROM pipelines WHERE id = %s", (pid,))
+            ).fetchone()
+        assert row["status"] == "killed"
+
+        # Clean up the hung task so pytest doesn't complain about
+        # un-awaited coroutines at teardown.
+        fake_task.cancel()
+        try:
+            await asyncio.wait_for(fake_task, timeout=0.2)
+        except (asyncio.CancelledError, asyncio.TimeoutError):
+            pass
+
+    async def test_kill_pipeline_works_without_active_task(self, initialized_db):
+        """Kill must work for pipelines not in _active_pipelines.
+
+        Covers the server-restart scenario: the orchestrator's in-memory
+        cache is empty but the DB still shows status='running'. Kill should
+        run the full DB cascade via handle_kill regardless.
+        """
+        pool = get_pool()
+        pid = await _seed_pipeline(pool, status="running")
+
+        async with pool.connection() as conn:
+            await conn.execute(
+                "INSERT INTO pipeline_stages "
+                "(pipeline_id, stage_key, stage_type, agent_type, status, max_iterations) "
+                "VALUES (%s, 'impl_task', 'impl_task', 'claude', 'running', 50)",
+                (pid,),
+            )
+            await conn.commit()
+
+        orch = PipelineOrchestrator(pool, LogBuffer())
+        # No entry in _active_pipelines — simulate post-restart kill.
+        assert pid not in orch._active_pipelines
+
+        await orch.kill_pipeline(pid)
+
+        async with pool.connection() as conn:
+            pipe_row = await (
+                await conn.execute("SELECT status FROM pipelines WHERE id = %s", (pid,))
+            ).fetchone()
+            stage_row = await (
+                await conn.execute(
+                    "SELECT status FROM pipeline_stages WHERE pipeline_id = %s", (pid,)
+                )
+            ).fetchone()
+        assert pipe_row["status"] == "killed"
+        assert stage_row["status"] == "killed"
+
 
 # ---------------------------------------------------------------------------
 # Strategies for property-based tests
@@ -1161,3 +1376,106 @@ class TestEnsureClone:
             await orch._ensure_clone(pid)
 
         mock_cm.create_clone.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Kill invariant property tests
+# ---------------------------------------------------------------------------
+
+
+class TestKillInvariants:
+    """Property-based invariants for ``kill_pipeline``.
+
+    Spec line 540: kill ``releases claims``. Combined with
+    ``UniqueTaskClaim`` (at most one live lease per primitive task), this
+    means: after ``kill_pipeline``, no HTN task for that pipeline may
+    remain ``in_progress``. This is true regardless of how many tasks were
+    in flight or which non-terminal status the pipeline started in.
+    """
+
+    @settings(
+        max_examples=10,
+        deadline=None,
+        suppress_health_check=[HealthCheck.function_scoped_fixture],
+    )
+    @given(
+        n_in_progress=st.integers(min_value=0, max_value=5),
+        starting_status=st.sampled_from(
+            ["running", "cancel_requested", "paused", "needs_attention"]
+        ),
+    )
+    @pytest.mark.asyncio
+    async def test_kill_releases_all_in_progress_claims(
+        self, initialized_db, n_in_progress, starting_status
+    ) -> None:
+        """For any non-terminal pipeline with N in-progress claims, kill
+        leaves zero ``in_progress`` HTN tasks.
+        """
+        pool = get_pool()
+        # Inline seed with uuid-suffixed unique names so Hypothesis can re-run
+        # without violating the repos.name / pipeline_defs.name UNIQUE
+        # constraints — _seed_pipeline uses a hardcoded name.
+        suffix = uuid.uuid4().hex[:8]
+        clone_dir = Path(f"/tmp/test-clone-kill-prop-{suffix}")
+        clone_dir.mkdir(parents=True, exist_ok=True)
+        async with pool.connection() as conn:
+            repo_row = await (
+                await conn.execute(
+                    "INSERT INTO repos (name, local_path) VALUES (%s, '/tmp/r') RETURNING id",
+                    (f"repo-kp-{suffix}",),
+                )
+            ).fetchone()
+            pdef_row = await (
+                await conn.execute(
+                    "INSERT INTO pipeline_defs (name, stage_graph_json) "
+                    "VALUES (%s, %s) RETURNING id",
+                    (f"def-kp-{suffix}", FULL_GRAPH_JSON),
+                )
+            ).fetchone()
+            pipe_row = await (
+                await conn.execute(
+                    "INSERT INTO pipelines (pipeline_def_id, repo_id, clone_path, "
+                    "review_base_rev, status) VALUES (%s, %s, %s, 'abc123', %s) "
+                    "RETURNING id",
+                    (pdef_row["id"], repo_row["id"], str(clone_dir), starting_status),
+                )
+            ).fetchone()
+            pid = pipe_row["id"]
+
+            for i in range(n_in_progress):
+                await conn.execute(
+                    "INSERT INTO htn_tasks "
+                    "(pipeline_id, name, description, task_type, status, priority, "
+                    " ordering, claim_token, claim_owner_token) "
+                    "VALUES (%s, %s, %s, 'primitive', 'in_progress', %s, %s, %s, %s)",
+                    (
+                        pid,
+                        f"task-{i}",
+                        "desc",
+                        i,
+                        i,
+                        f"claim-{i}-{suffix}",
+                        "owner-tok",
+                    ),
+                )
+            await conn.commit()
+
+        orch = PipelineOrchestrator(pool, LogBuffer())
+        await orch.kill_pipeline(pid)
+
+        async with pool.connection() as conn:
+            row = await (
+                await conn.execute(
+                    "SELECT COUNT(*) AS c FROM htn_tasks "
+                    "WHERE pipeline_id = %s AND status = 'in_progress'",
+                    (pid,),
+                )
+            ).fetchone()
+            pipe_row = await (
+                await conn.execute(
+                    "SELECT status FROM pipelines WHERE id = %s", (pid,)
+                )
+            ).fetchone()
+
+        assert row["c"] == 0
+        assert pipe_row["status"] == "killed"

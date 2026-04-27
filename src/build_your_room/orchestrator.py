@@ -61,6 +61,7 @@ class PipelineOrchestrator:
         max_concurrent: int = 10,
         lease_ttl_sec: int = PIPELINE_LEASE_TTL_SEC,
         heartbeat_interval_sec: int = PIPELINE_HEARTBEAT_INTERVAL_SEC,
+        kill_drain_timeout_sec: float = 5.0,
         adapters: dict[str, AgentAdapter] | None = None,
         clone_manager: CloneManager | None = None,
         lease_manager: LeaseManager | None = None,
@@ -71,6 +72,7 @@ class PipelineOrchestrator:
         self._semaphore = asyncio.Semaphore(max_concurrent)
         self._lease_ttl_sec = lease_ttl_sec
         self._heartbeat_interval_sec = heartbeat_interval_sec
+        self._kill_drain_timeout_sec = kill_drain_timeout_sec
         self._adapters: dict[str, AgentAdapter] = adapters or {}
         self._clone_manager = clone_manager or CloneManager(pool)
         self._lease_manager = lease_manager or LeaseManager(
@@ -116,20 +118,39 @@ class PipelineOrchestrator:
             cancel_event.set()
 
     async def kill_pipeline(self, pipeline_id: int) -> None:
-        """Immediately terminate a pipeline's live sessions."""
-        async with self._pool.connection() as conn:
-            await conn.execute(
-                "UPDATE pipelines SET status = 'killed', updated_at = now() "
-                "WHERE id = %s AND status IN ('running', 'cancel_requested', 'paused')",
-                (pipeline_id,),
-            )
-            await conn.commit()
+        """Immediately terminate a pipeline's live sessions, snapshot, reset, and mark killed.
 
+        Spec lines 539-541: ``POST /pipelines/{id}/kill terminates live sessions
+        immediately. The orchestrator then snapshots any dirty workspace it
+        can recover, resets the clone to the accepted baseline, releases
+        claims, and marks the pipeline killed.``
+
+        Order matters: cancel the asyncio task first so the stage runner's
+        ``finally`` blocks (and the adapter's ``__aexit__`` for live SDK
+        clients) get a chance to drain. We then run ``handle_kill`` to do the
+        DB cascade plus dirty-workspace snapshot + clone reset. Kill is also
+        callable for pipelines that are not in ``_active_pipelines`` — that
+        covers the server-restart-after-crash case where DB rows are stale
+        but the asyncio task is gone.
+        """
         entry = self._active_pipelines.pop(pipeline_id, None)
         if entry:
             task, cancel_event = entry
             cancel_event.set()
             task.cancel()
+            # Drain the cancelled task so the adapter's __aexit__ closes its
+            # SDK client / Codex subprocess before we snapshot. Bound the
+            # wait so a hung SDK cannot stall the kill path indefinitely.
+            try:
+                await asyncio.wait_for(task, timeout=self._kill_drain_timeout_sec)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                pass
+            except Exception:
+                logger.exception(
+                    "Pipeline %d task raised while draining for kill", pipeline_id
+                )
+
+        await self._recovery_manager.handle_kill(pipeline_id)
 
     async def resume_pipeline(self, pipeline_id: int, resolution: str) -> None:
         """Resume a paused pipeline after human escalation resolution."""
